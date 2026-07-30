@@ -1,0 +1,9 @@
+# The image only copies files from docker/. Keep wallets, environment files,
+# repository metadata, and custom wallet paths out of every build context.
+**
+!docker/
+!docker/Dockerfile
+!docker/novnc-index.html
+!docker/entrypoint.sh
+!docker/cashfusion.sh
+!docker/electroncash-wrapper.py
