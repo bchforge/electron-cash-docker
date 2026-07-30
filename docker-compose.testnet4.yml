@@ -1,0 +1,4 @@
+services:
+  electron-cash:
+    environment:
+      TESTNET4: "true"
