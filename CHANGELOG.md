@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+- Fixed cross-platform wallet persistence with the Compose-managed
+  `bchforge-electron-cash-data` volume.
+- Preserved non-root runtime execution and fail-closed startup behavior.
+- Documented volume inspection, deletion, and the distinction between
+  persistence and backup.
+
 ## v0.1
 
 - Added browser access through noVNC.

@@ -69,8 +69,6 @@ FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebff
 ARG NOVNC_VERSION
 ARG NOVNC_COMMIT
 ARG NOVNC_ARCHIVE_SHA256
-ARG UID
-ARG GID
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -110,10 +108,12 @@ RUN curl -fsSL -o "/tmp/novnc-${NOVNC_VERSION}.tar.gz" \
 
 COPY --from=builder /opt/electroncash-venv /opt/electroncash-venv
 
-RUN if [ "$(id -g ubuntu)" != "${GID}" ]; then groupmod --gid "${GID}" ubuntu; fi && \
-    if [ "$(id -u ubuntu)" != "${UID}" ]; then usermod --uid "${UID}" ubuntu; fi && \
-    mkdir -p /home/ubuntu/.electron-cash \
-        /home/ubuntu/.config/openbox && \
+RUN groupadd --gid 10001 electroncash && \
+    useradd --uid 10001 --gid 10001 --create-home \
+        --home-dir /home/electroncash --shell /usr/sbin/nologin electroncash && \
+    mkdir -p /home/electroncash/.electron-cash \
+        /home/electroncash/.config/openbox \
+        /home/electroncash/.local/share && \
     printf '%s\n' \
         '<?xml version="1.0" encoding="UTF-8"?>' \
         '<openbox_config>' \
@@ -124,17 +124,19 @@ RUN if [ "$(id -g ubuntu)" != "${GID}" ]; then groupmod --gid "${GID}" ubuntu; f
         '    </application>' \
         '  </applications>' \
         '</openbox_config>' \
-        > /home/ubuntu/.config/openbox/rc.xml && \
-    chown -R ubuntu:ubuntu /home/ubuntu
+        > /home/electroncash/.config/openbox/rc.xml && \
+    chown -R electroncash:electroncash /home/electroncash
 
 COPY docker/novnc-index.html /opt/noVNC/index.html
-COPY --chown=ubuntu:ubuntu docker/entrypoint.sh /home/ubuntu/entrypoint.sh
-COPY --chown=ubuntu:ubuntu docker/cashfusion.sh /home/ubuntu/cashfusion.sh
-COPY --chown=ubuntu:ubuntu docker/electroncash-wrapper.py /home/ubuntu/electroncash-wrapper.py
+COPY --chown=electroncash:electroncash docker/entrypoint.sh /home/electroncash/entrypoint.sh
+COPY --chown=electroncash:electroncash docker/cashfusion.sh /home/electroncash/cashfusion.sh
+COPY --chown=electroncash:electroncash docker/electroncash-wrapper.py /home/electroncash/electroncash-wrapper.py
 
-RUN chmod +x /home/ubuntu/entrypoint.sh /home/ubuntu/cashfusion.sh /home/ubuntu/electroncash-wrapper.py
+RUN chmod +x /home/electroncash/entrypoint.sh \
+        /home/electroncash/cashfusion.sh \
+        /home/electroncash/electroncash-wrapper.py
 
-WORKDIR /home/ubuntu
-VOLUME ["/home/ubuntu/.electron-cash"]
+ENV HOME=/home/electroncash
+WORKDIR /home/electroncash
 EXPOSE 6080
-ENTRYPOINT ["/home/ubuntu/entrypoint.sh"]
+ENTRYPOINT ["/home/electroncash/entrypoint.sh"]

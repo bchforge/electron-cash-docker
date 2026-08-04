@@ -14,7 +14,7 @@ case "${CASHFUSION_AUTO_FUSE}" in
     *) echo "[!] CASHFUSION_AUTO_FUSE must be true or false"; exit 1 ;;
 esac
 
-CONFIG_FILE="${CONFIG_FILE:-/home/ubuntu/.electron-cash/config}"
+CONFIG_FILE="${CONFIG_FILE:-/home/electroncash/.electron-cash/config}"
 CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
 
 mkdir -p "${CONFIG_DIR}"

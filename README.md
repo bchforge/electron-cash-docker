@@ -42,14 +42,52 @@ docker compose up -d
 ```
 
 Open <http://127.0.0.1:6080/>. The first start opens Electron Cash's wallet
-setup wizard. Wallet data is stored in `./wallet` by default and
-survives container restarts. `WALLET_DIR` must always point to a dedicated
-wallet directory, not a filesystem or shared directory root. On first use it
-must be empty; the container then adds a `.electron-cash-docker` marker. Later
-starts reject directories without that marker or data owned by a different
-configured UID/GID instead of changing ownership recursively. Symbolic links
-inside the wallet directory are rejected so privileged setup cannot leave the
-dedicated data tree.
+setup wizard. Docker Compose creates the named volume
+`bchforge-electron-cash-data` automatically. It is mounted at
+`/home/electroncash/.electron-cash` and survives container restarts and normal
+`docker compose down` operations. On first use the container adds a
+`.electron-cash-docker` marker after checking the empty volume. Later starts
+reject invalid markers, symbolic links, incompatible ownership, and ineffective
+access instead of changing existing data recursively.
+
+### Volume Management
+
+List and inspect the data volume with ordinary Docker commands:
+
+```bash
+docker volume ls --filter name=bchforge-electron-cash
+docker volume inspect bchforge-electron-cash-data
+```
+
+Docker Desktop users can open **Volumes**, select
+`bchforge-electron-cash-data`, and browse its files. To inspect files without
+writing to the volume, stop the stack and use a read-only helper:
+
+```bash
+docker compose down
+docker run --rm --read-only --network none --cap-drop=ALL \
+  --user 10001:10001 \
+  --mount type=volume,src=bchforge-electron-cash-data,dst=/data,readonly \
+  --entrypoint /bin/bash electron-cash:4.4.5 \
+  -c 'find /data -maxdepth 3 -print'
+```
+
+Do not edit live Electron Cash files while the application is running. Do not
+use Docker's internal paths such as `/var/lib/docker/volumes` as a normal
+management method.
+
+To intentionally erase all wallet data, stop the stack first and remove the
+volume explicitly:
+
+```bash
+docker compose down
+docker volume rm bchforge-electron-cash-data
+```
+
+Volume deletion is permanent. `docker compose down -v` also removes this
+Compose-managed volume, so it must not be used casually. Keep the recovery seed
+independently; persistence is not a backup. Encrypted manual backup and tested
+restoration remain planned for `v0.3`.
 
 ## Tor And CashFusion
 
@@ -117,7 +155,7 @@ English and Spanish setup and security documentation is planned for `v1.0`.
   and Basic Auth are planned for `v0.3`.
 - Set a wallet password inside Electron Cash before using meaningful funds.
 - Keep the recovery seed offline and never put a real seed in `.env`.
-- A compromised Docker host can read the wallet directory.
+- A compromised Docker host can read the Docker-managed wallet volume.
 - Persistence is not a backup. A project-managed encrypted backup and tested
   restoration are planned for `v0.3`.
 - Tor protects the configured Electron Cash network traffic, not the browser,
@@ -141,8 +179,10 @@ docker compose -f docker-compose.yml \
 ```
 
 The override starts Electron Cash with the `--testnet4` flag. With the default
-`WALLET_DIR=./wallet`, testnet4 data is kept under `./wallet/testnet4`. A custom
-wallet directory stores it under `${WALLET_DIR}/testnet4`. Do not use this
+Docker-managed volume, testnet4 data is kept under the internal
+`/home/electroncash/.electron-cash/testnet4` directory. Mainnet data remains at
+the volume root. Stop the current stack before switching between mainnet and
+testnet4 because both paths use the same data volume. Do not use this
 environment for real funds.
 
 For an automated encrypted test wallet, use the testnet4-only variables:

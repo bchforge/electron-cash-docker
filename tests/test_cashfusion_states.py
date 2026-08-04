@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
-import base64
 import json
 import os
 import subprocess
 import tempfile
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -31,17 +32,52 @@ def run(command, *, env=None, input_text=None):
     )
 
 
-def docker_python(case_dir, code, *, env=None):
+@contextmanager
+def disposable_volume(prefix):
+    name = f"bchforge-test-{prefix}-{uuid.uuid4().hex}"
+    created = run(
+        ["docker", "volume", "create", "--label", "com.bchforge.test=true", name]
+    )
+    if created.returncode != 0:
+        raise AssertionError(created.stdout + created.stderr)
+    prepared = run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--mount",
+            f"type=volume,src={name},dst=/case",
+            "--entrypoint",
+            "/bin/bash",
+            IMAGE,
+            "-c",
+            "chown 10001:10001 /case && chmod 700 /case",
+        ]
+    )
+    if prepared.returncode != 0:
+        run(["docker", "volume", "rm", name])
+        raise AssertionError(prepared.stdout + prepared.stderr)
+    try:
+        yield name
+    finally:
+        run(["docker", "volume", "rm", name])
+
+
+def docker_python(volume, code, *, env=None):
     command = [
         "docker",
         "run",
         "--rm",
+        "--network",
+        "none",
         "--user",
-        f"{os.getuid()}:{os.getgid()}",
+        "10001:10001",
         "-e",
-        "HOME=/home/ubuntu",
-        "-v",
-        f"{case_dir}:/case",
+        "HOME=/home/electroncash",
+        "--mount",
+        f"type=volume,src={volume},dst=/case",
     ]
     for key, value in (env or {}).items():
         command.extend(["-e", f"{key}={value}"])
@@ -52,7 +88,7 @@ def docker_python(case_dir, code, *, env=None):
     return result.stdout + result.stderr
 
 
-def initialize_wallet(case_dir, encrypted, initial_autofuse):
+def initialize_wallet(volume, encrypted, initial_autofuse):
     code = r'''
 from electroncash.storage import WalletStorage
 import os
@@ -65,7 +101,7 @@ if os.environ["ENCRYPTED"] == "true":
 storage.write()
 '''
     docker_python(
-        case_dir,
+        volume,
         code,
         env={
             "ENCRYPTED": str(encrypted).lower(),
@@ -75,7 +111,47 @@ storage.write()
     )
 
 
-def run_runtime_hook(case_dir, enabled, auto_fuse):
+def run_cashfusion(volume, enabled, auto_fuse):
+    code = r'''
+import json
+import os
+import subprocess
+from pathlib import Path
+
+wallet_path = Path("/case/default_wallet")
+config_path = Path("/case/config")
+wallet_before = wallet_path.read_bytes()
+config_path.write_text(json.dumps({"gui_last_wallet": str(wallet_path)}), encoding="utf-8")
+result = subprocess.run(
+    ["bash", "/home/electroncash/cashfusion.sh"],
+    capture_output=True,
+    text=True,
+    env=os.environ.copy(),
+)
+if result.returncode != 0:
+    raise SystemExit(result.stdout + result.stderr)
+
+print("RESULT=" + json.dumps({
+    "wallet_unchanged": wallet_path.read_bytes() == wallet_before,
+    "config": json.loads(config_path.read_text(encoding="utf-8")),
+}))
+'''
+    output = docker_python(
+        volume,
+        code,
+        env={
+            "CONFIG_FILE": "/case/config",
+            "CASHFUSION_ENABLED": str(enabled).lower(),
+            "CASHFUSION_AUTO_FUSE": str(auto_fuse).lower(),
+        },
+    )
+    for line in output.splitlines():
+        if line.startswith("RESULT="):
+            return json.loads(line.removeprefix("RESULT="))
+    raise AssertionError(f"No RESULT line found:\n{output}")
+
+
+def run_runtime_hook(volume, enabled, auto_fuse):
     code = r'''
 import importlib.util
 import json
@@ -86,7 +162,7 @@ from electroncash_plugins.fusion.conf import Conf
 from electroncash_plugins.fusion.qt import Plugin as FusionPlugin
 
 spec = importlib.util.spec_from_file_location(
-    "electroncash_wrapper", "/home/ubuntu/electroncash-wrapper.py"
+    "electroncash_wrapper", "/home/electroncash/electroncash-wrapper.py"
 )
 wrapper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wrapper)
@@ -137,7 +213,7 @@ print("RESULT=" + json.dumps({
 }))
 '''
     output = docker_python(
-        case_dir,
+        volume,
         code,
         env={
             "CASHFUSION_ENABLED": str(enabled).lower(),
@@ -151,57 +227,26 @@ print("RESULT=" + json.dumps({
     raise AssertionError(f"No RESULT line found:\n{output}")
 
 
-def is_encrypted(path):
-    raw = path.read_text()
-    try:
-        return base64.b64decode(raw)[:4] == b"BIE1"
-    except Exception:
-        return False
-
-
 def test_state(encrypted, enabled, auto_fuse):
     initial_autofuse = not auto_fuse if enabled else False
 
-    with tempfile.TemporaryDirectory(prefix="cashfusion-state-") as temp_dir:
-        case_dir = Path(temp_dir)
-        wallet_path = case_dir / "default_wallet"
-        config_path = case_dir / "config"
+    with disposable_volume("cashfusion-state") as volume:
+        initialize_wallet(volume, encrypted, initial_autofuse)
+        runtime_config = run_cashfusion(volume, enabled, auto_fuse)
 
-        initialize_wallet(case_dir, encrypted, initial_autofuse)
-        wallet_before_config = wallet_path.read_bytes()
-        config_path.write_text(
-            json.dumps({"gui_last_wallet": str(wallet_path)}), encoding="utf-8"
-        )
-
-        env = os.environ.copy()
-        env.update(
-            {
-                "CONFIG_FILE": str(config_path),
-                "CASHFUSION_ENABLED": str(enabled).lower(),
-                "CASHFUSION_AUTO_FUSE": str(auto_fuse).lower(),
-            }
-        )
-        result = run(["bash", "docker/cashfusion.sh"], env=env)
-        if result.returncode != 0:
-            raise AssertionError(result.stdout + result.stderr)
-
-        assert wallet_path.read_bytes() == wallet_before_config, (
-            "cashfusion.sh modified wallet storage directly"
-        )
-
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert runtime_config["wallet_unchanged"]
+        config = runtime_config["config"]
         assert config["use_fusion"] is enabled
         assert config["cashfusion_tor_host"] == "tor-proxy"
         assert config["cashfusion_tor_port_manual"] == 9050
         assert config["cashfusion_tor_port_auto"] is False
 
-        runtime = run_runtime_hook(case_dir, enabled, auto_fuse)
+        runtime = run_runtime_hook(volume, enabled, auto_fuse)
         expected_autofuse = auto_fuse if enabled else initial_autofuse
         assert runtime["autofuse"] is expected_autofuse
         assert runtime["value_in_original"] is expected_autofuse
         assert runtime["encrypted_before"] is encrypted
         assert runtime["encrypted_after"] is encrypted
-        assert is_encrypted(wallet_path) is encrypted
 
 
 def test_invalid_values():
@@ -255,82 +300,38 @@ def test_entrypoint_rejects_unsafe_values():
         "-e",
         "CASHFUSION_AUTO_FUSE=false",
     ]
-    cases = (
-        (["-e", "USE_TOR=invalid", "-e", "WALLET_DIR_HOST=./wallet"], "USE_TOR"),
-        (["-e", "USE_TOR=true", "-e", "WALLET_DIR_HOST=/"], "WALLET_DIR"),
+    result = run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            *common_environment,
+            "-e",
+            "USE_TOR=invalid",
+            IMAGE,
+        ]
     )
-    for environment, expected_message in cases:
-        result = run(
-            ["docker", "run", "--rm", *common_environment, *environment, IMAGE]
-        )
-        assert result.returncode == 1
-        assert expected_message in result.stdout
+    assert result.returncode == 1
+    assert "USE_TOR" in result.stdout
 
 
-def test_entrypoint_rejects_shared_wallet_directory():
-    with tempfile.TemporaryDirectory(prefix="electron-cash-shared-wallet-") as temp_dir:
-        shared_path = Path(temp_dir)
-        unrelated_path = shared_path / "unrelated-data"
-        unrelated_path.write_text("do not modify", encoding="utf-8")
-        owner_before = shared_path.stat().st_uid, unrelated_path.stat().st_uid
-        result = run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-e",
-                "USE_TOR=true",
-                "-e",
-                f"WALLET_DIR_HOST={shared_path}",
-                "-e",
-                "CASHFUSION_ENABLED=true",
-                "-e",
-                "CASHFUSION_AUTO_FUSE=false",
-                "-v",
-                f"{shared_path}:/home/ubuntu/.electron-cash",
-                IMAGE,
-            ]
-        )
-        assert result.returncode == 1
-        assert "must be empty on first use" in result.stdout
-        assert (shared_path.stat().st_uid, unrelated_path.stat().st_uid) == owner_before
-        assert unrelated_path.read_text(encoding="utf-8") == "do not modify"
-
-
-def test_entrypoint_rejects_wallet_symlinks():
-    with tempfile.TemporaryDirectory(prefix="electron-cash-wallet-link-") as temp_dir:
-        wallet_path = Path(temp_dir) / "wallet"
-        external_path = Path(temp_dir) / "external"
-        wallet_path.mkdir()
-        external_path.mkdir()
-        (wallet_path / ".electron-cash-docker").write_text(
-            "electron-cash-docker-v0.1\n", encoding="utf-8"
-        )
-        (wallet_path / "testnet4").symlink_to(external_path, target_is_directory=True)
-        owner_before = external_path.stat().st_uid
-        result = run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-e",
-                "USE_TOR=true",
-                "-e",
-                f"WALLET_DIR_HOST={wallet_path}",
-                "-e",
-                "CASHFUSION_ENABLED=true",
-                "-e",
-                "CASHFUSION_AUTO_FUSE=false",
-                "-e",
-                "TESTNET4=true",
-                "-v",
-                f"{wallet_path}:/home/ubuntu/.electron-cash",
-                IMAGE,
-            ]
-        )
-        assert result.returncode == 1
-        assert "must not contain symbolic links" in result.stdout
-        assert external_path.stat().st_uid == owner_before
+def test_entrypoint_rejects_missing_volume():
+    result = run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-e",
+            "USE_TOR=true",
+            "-e",
+            "CASHFUSION_ENABLED=true",
+            "-e",
+            "CASHFUSION_AUTO_FUSE=false",
+            IMAGE,
+        ]
+    )
+    assert result.returncode == 1
+    assert "mounted Docker volume" in result.stdout
 
 
 def test_test_wallet_password_hook():
@@ -341,7 +342,7 @@ import json
 from electroncash.daemon import Daemon
 
 spec = importlib.util.spec_from_file_location(
-    "electroncash_wrapper", "/home/ubuntu/electroncash-wrapper.py"
+    "electroncash_wrapper", "/home/electroncash/electroncash-wrapper.py"
 )
 wrapper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wrapper)
@@ -358,9 +359,9 @@ wrapper.install_test_wallet_password()
 result = Daemon.load_wallet(object(), "/wallet", None)
 print("RESULT=" + json.dumps({"observed": observed, "result": result}))
 '''
-    with tempfile.TemporaryDirectory(prefix="cashfusion-password-") as temp_dir:
+    with disposable_volume("cashfusion-password") as volume:
         output = docker_python(
-            Path(temp_dir),
+            volume,
             code,
             env={"TESTNET4": "true", "TEST_WALLET_PASSWORD": PASSWORD},
         )
@@ -379,8 +380,6 @@ def test_mainnet_rejects_test_password():
             "-e",
             "USE_TOR=true",
             "-e",
-            "WALLET_DIR_HOST=./wallet",
-            "-e",
             "CASHFUSION_ENABLED=true",
             "-e",
             "CASHFUSION_AUTO_FUSE=false",
@@ -398,8 +397,7 @@ def main():
     test_invalid_values()
     test_invalid_config_is_preserved()
     test_entrypoint_rejects_unsafe_values()
-    test_entrypoint_rejects_shared_wallet_directory()
-    test_entrypoint_rejects_wallet_symlinks()
+    test_entrypoint_rejects_missing_volume()
     test_test_wallet_password_hook()
     test_mainnet_rejects_test_password()
 

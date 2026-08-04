@@ -1,5 +1,5 @@
-# The image only copies files from docker/. Keep wallets, environment files,
-# repository metadata, and custom wallet paths out of every build context.
+# The image only copies files from docker/. Keep wallets, environment files, and
+# repository metadata out of every build context.
 **
 !docker/
 !docker/Dockerfile
