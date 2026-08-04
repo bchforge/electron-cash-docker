@@ -10,23 +10,20 @@ services:
         NOVNC_VERSION: ${NOVNC_VERSION:?NOVNC_VERSION must be set in .env}
         NOVNC_COMMIT: ${NOVNC_COMMIT:?NOVNC_COMMIT must be set in .env}
         NOVNC_ARCHIVE_SHA256: ${NOVNC_ARCHIVE_SHA256:?NOVNC_ARCHIVE_SHA256 must be set in .env}
-        UID: ${UID:?UID must be set in .env}
-        GID: ${GID:?GID must be set in .env}
     image: electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}
     container_name: electron-cash
-    restart: on-failure
+    restart: "on-failure:5"
     stop_grace_period: 15s
     ports:
       - "${NOVNC_BIND:?NOVNC_BIND must be set in .env}:${NOVNC_HOST_PORT:?NOVNC_HOST_PORT must be set in .env}:6080"
     environment:
-      WALLET_DIR_HOST: ${WALLET_DIR:?WALLET_DIR must be set in .env}
       USE_TOR: ${USE_TOR:?USE_TOR must be set in .env}
       CASHFUSION_ENABLED: ${CASHFUSION_ENABLED:?CASHFUSION_ENABLED must be set in .env}
       CASHFUSION_AUTO_FUSE: ${CASHFUSION_AUTO_FUSE:?CASHFUSION_AUTO_FUSE must be set in .env}
       WALLET_AUTO_CREATE: ${WALLET_AUTO_CREATE:-false}
       TEST_WALLET_PASSWORD: ${TEST_WALLET_PASSWORD:-}
     volumes:
-      - ${WALLET_DIR:?WALLET_DIR must be set in .env}:/home/ubuntu/.electron-cash
+      - electron-cash-data:/home/electroncash/.electron-cash
     depends_on:
       tor-proxy:
         condition: service_started
@@ -46,3 +43,7 @@ services:
 networks:
   electron-network:
     driver: bridge
+
+volumes:
+  electron-cash-data:
+    name: bchforge-electron-cash-data
