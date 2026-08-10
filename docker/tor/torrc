@@ -1,0 +1,20 @@
+# BCH Forge Tor client configuration.
+# This file intentionally enables only the SOCKS service Electron Cash needs.
+
+ClientOnly 1
+Sandbox 1
+SocksPort 0.0.0.0:9050
+SocksPolicy accept *
+
+DataDirectory /var/lib/tor
+RunAsDaemon 0
+Log notice stdout
+SafeLogging 1
+
+# Explicitly disable other listener classes. These are not required by
+# Electron Cash or CashFusion and must not become accidental capabilities.
+ControlPort 0
+DNSPort 0
+HTTPTunnelPort 0
+TransPort 0
+NATDPort 0

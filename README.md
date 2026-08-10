@@ -7,9 +7,11 @@ with opt-in automatic fusion.
 
 ## Current v0.1 Scope
 
-`v0.1` is the current project version. It provides local browser access,
-persistent Electron Cash data, Tor for SPV traffic, the default-enabled
-CashFusion plugin with opt-in auto-fusion, and a test-only testnet4 override.
+`v0.1.2` is the current maintenance release within the existing `v0.1` scope.
+It provides local browser access, persistent Electron Cash data, Tor for SPV
+traffic, the default-enabled CashFusion plugin with opt-in auto-fusion, and a
+test-only testnet4 override. v0.1.2 changes only the Tor supply chain and
+directly related hardening, tests, and documentation.
 
 Electron Cash Docker is developed as an independent open-source project.
 Planned features are organized by release and are not part of `v0.1`.
@@ -49,6 +51,9 @@ setup wizard. Docker Compose creates the named volume
 `.electron-cash-docker` marker after checking the empty volume. Later starts
 reject invalid markers, symbolic links, incompatible ownership, and ineffective
 access instead of changing existing data recursively.
+The Tor image is built locally during `docker compose build` from the pinned
+Tor Project source release; no third-party Tor container image is pulled. Tor
+client state is stored separately in `bchforge-electron-cash-tor-data`.
 
 ### Volume Management
 
@@ -94,6 +99,21 @@ restoration remain planned for `v0.3`.
 Electron Cash routes SPV traffic through the internal `tor-proxy` service by
 default.
 
+The `tor-proxy` image is a BCH Forge multi-stage build in
+[`docker/tor/`](docker/tor/). It downloads Tor `0.4.9.11` from the official Tor
+Project source distribution, verifies the Tor Project release signature and
+the pinned SHA-256 before compilation, and runs the resulting client as UID/GID
+`10001:10001`. The signed release process, key fingerprints, Docker stages,
+license handling, and update procedure are documented in
+[`docs/tor-supply-chain.md`](docs/tor-supply-chain.md).
+
+Only SOCKS5 is enabled at `tor-proxy:9050`. The endpoint is Docker-internal:
+Compose uses `expose`, not a host `ports` mapping. The Tor container has no
+ControlPort, HTTP proxy, DNS proxy, relay, bridge, onion-service, Nyx, or
+Lyrebird capability. Tor's local healthcheck tests the SOCKS handshake without
+contacting an external website; acceptance tests separately verify bootstrap
+and a Tor-routed connection.
+
 The CashFusion plugin is enabled by default and preconfigured to use Tor.
 Automatic background fusion remains disabled until explicitly enabled:
 
@@ -129,9 +149,19 @@ docker compose down
 ```
 
 The Electron Cash and noVNC versions in `.env` have matching commit and archive
-integrity pins. Update each version and all of its pins together. The Ubuntu and
-Tor images are also pinned by digest so builds do not silently consume a
-different image under the same tag.
+integrity pins. Update each version and all of its pins together. The Ubuntu
+base image is pinned by digest, and the Tor source version and SHA-256 are
+required build pins in `.env.example`; builds do not silently consume a
+different source artifact under the same version.
+
+To inspect or rebuild only the Tor component:
+
+```bash
+docker compose --env-file .env.example build tor-proxy
+docker run --rm --entrypoint /usr/local/bin/tor \
+  bchforge/electron-cash-docker-tor:0.4.9.11 --version
+python3 tests/test_tor_proxy.py
+```
 
 After building the image, run the CashFusion state matrix with:
 
@@ -158,8 +188,9 @@ English and Spanish setup and security documentation is planned for `v1.0`.
 - A compromised Docker host can read the Docker-managed wallet volume.
 - Persistence is not a backup. A project-managed encrypted backup and tested
   restoration are planned for `v0.3`.
-- Tor protects the configured Electron Cash network traffic, not the browser,
-  host, or every application on the machine.
+- Tor protects only the configured Electron Cash and CashFusion traffic through
+  `tor-proxy:9050`, not the browser, host, wallet volume, or every application
+  on the machine.
 - In `v0.1`, the internal passwordless VNC endpoint shares a Docker network with
   the bundled Tor proxy. Attach no additional containers to that network.
   Isolating internal GUI services is planned as part of `v1.0` hardening.
@@ -204,11 +235,13 @@ testnet4.
 
 ## Release Roadmap
 
-Only `v0.1` is the current baseline. The unchecked releases are planned future
-project versions:
+The checked `v0.1` baseline and its v0.1.x maintenance releases are current.
+The unchecked releases are planned future project versions:
 
 - [x] `v0.1`: browser access, persistent wallet data, Tor, the CashFusion plugin
   with opt-in auto-fusion, and a test-only testnet4 override.
+- [x] `v0.1.2`: maintenance hardening of the auditable Tor source build; not a
+  feature expansion.
 - [ ] `v0.2`: secure plugin distribution, Flipstarter Helper, headless mode, and
   optional password-authenticated JSON-RPC disabled by default.
 - [ ] `v0.3`: HTTPS, Basic Auth, fail2ban, additional CashFusion defaults for
@@ -226,3 +259,9 @@ project versions:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Tor is separate upstream work and is distributed under the Tor Project's
+3-clause BSD license with its bundled notices. The exact Tor license is copied
+into the Tor runtime image at `/usr/share/doc/tor/LICENSE`; see
+[`docs/tor-supply-chain.md`](docs/tor-supply-chain.md) for the supply-chain
+record.
