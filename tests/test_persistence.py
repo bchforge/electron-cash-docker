@@ -132,7 +132,7 @@ def compose_env(port, *, testnet=False):
     return env
 
 
-def write_volume_override(directory, volume):
+def write_volume_override(directory, volume, tor_volume):
     override = Path(directory) / "volume-override.yml"
     override.write_text(
         "services:\n"
@@ -141,7 +141,9 @@ def write_volume_override(directory, volume):
         "      - electron-cash-data:/home/electroncash/.electron-cash\n"
         "volumes:\n"
         "  electron-cash-data:\n"
-        f"    name: {volume}\n",
+        f"    name: {volume}\n"
+        "  tor-data:\n"
+        f"    name: {tor_volume}\n",
         encoding="utf-8",
     )
     return override
@@ -237,9 +239,10 @@ def assert_sentinel(volume, relative_path, value):
 def test_compose_managed_persistence():
     project = unique_name("compose")
     volume = unique_name("volume")
+    tor_volume = unique_name("tor-state")
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="bchforge-compose-") as temp_dir:
-        override = write_volume_override(temp_dir, volume)
+        override = write_volume_override(temp_dir, volume, tor_volume)
         env = compose_env(port)
         args = compose_args(project, override)
         try:
@@ -278,14 +281,16 @@ def test_compose_managed_persistence():
         finally:
             run([*args, "down", "--remove-orphans"], env=env, timeout=120)
             remove_volume(volume)
+            remove_volume(tor_volume)
 
 
 def test_testnet4_uses_internal_subdirectory():
     project = unique_name("testnet4")
     volume = unique_name("volume")
+    tor_volume = unique_name("tor-state")
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="bchforge-testnet4-") as temp_dir:
-        override = write_volume_override(temp_dir, volume)
+        override = write_volume_override(temp_dir, volume, tor_volume)
         main_env = compose_env(port)
         main_args = compose_args(project, override)
         testnet_env = compose_env(port, testnet=True)
@@ -309,6 +314,7 @@ def test_testnet4_uses_internal_subdirectory():
         finally:
             run([*testnet_args, "down", "--remove-orphans"], env=testnet_env, timeout=120)
             remove_volume(volume)
+            remove_volume(tor_volume)
 
 
 def test_unmarked_nonempty_volume_rejected():
