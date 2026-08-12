@@ -1,8 +1,9 @@
 # Tor Supply Chain
 
-Electron Cash Docker v0.1.2 builds its Tor proxy locally from the official Tor
-Project source release. The repository does not consume a third-party Tor
-container image.
+The BCH Forge-maintained Tor source build was introduced in v0.1.2 and is
+retained in v0.1.3. Electron Cash Docker builds its Tor proxy locally from the
+official Tor Project source release; the repository does not consume a
+third-party Tor container image.
 
 ## Upstream And Pins
 
@@ -66,6 +67,13 @@ consult the network or a keyserver during the build.
    SOCKS healthcheck.
 
 ## Runtime Boundary
+
+`tor-proxy` is the stack's standalone Tor service with an independent lifecycle
+from Electron Cash. Electron Cash's SPV path and the CashFusion plugin
+explicitly consume its `tor-proxy:9050` SOCKS endpoint. Future components may
+reuse the service only when explicitly configured. It is not a transparent
+network gateway, so unrelated container, host, browser, or wallet-volume
+traffic is not automatically protected.
 
 The runtime user is UID/GID `10001:10001`. Compose adds `cap_drop: ALL`,
 `no-new-privileges`, and a read-only root filesystem. Tor's only writable path
@@ -133,8 +141,7 @@ unsigned artifact, or a checksum calculated only from an untrusted download.
 
 ## Limitations
 
-Tor covers only Electron Cash traffic explicitly configured to use
-`tor-proxy:9050`, including the CashFusion plugin. It does not protect the
-browser, Docker host, wallet volume, or unrelated applications. A working
-SOCKS listener and a successful Tor circuit do not protect the wallet from a
-compromised host or unsafe wallet operations.
+Tor covers only traffic explicitly configured to use `tor-proxy:9050`, including
+the Electron Cash SPV path and CashFusion plugin. A working SOCKS listener and a
+successful Tor circuit do not protect the wallet from a compromised host or
+unsafe wallet operations.

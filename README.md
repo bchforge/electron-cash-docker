@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/electron-cash-docker-banner.png" alt="Electron Cash Docker — BCH Forge">
+</p>
+
 # Electron Cash Docker
 
 Electron Cash Docker packages [Electron Cash](https://github.com/Electron-Cash/Electron-Cash),
@@ -7,11 +11,13 @@ with opt-in automatic fusion.
 
 ## Current v0.1 Scope
 
-`v0.1.2` is the current maintenance release within the existing `v0.1` scope.
-It provides local browser access, persistent Electron Cash data, Tor for SPV
-traffic, the default-enabled CashFusion plugin with opt-in auto-fusion, and a
-test-only testnet4 override. v0.1.2 changes only the Tor supply chain and
-directly related hardening, tests, and documentation.
+`v0.1.3` is the current maintenance release within the existing `v0.1` scope.
+It upgrades Electron Cash to 4.4.6, retains the standalone BCH Forge Tor
+0.4.9.11 service, and clarifies that service's architecture. It continues to
+provide local browser access, persistent Electron Cash data, Tor for explicitly
+configured SPV and CashFusion traffic, the default-enabled CashFusion plugin
+with opt-in auto-fusion, and a test-only testnet4 override. v0.1.3 does not
+expand the v0.1 product scope.
 
 Electron Cash Docker is developed as an independent open-source project.
 Planned features are organized by release and are not part of `v0.1`.
@@ -73,7 +79,7 @@ docker compose down
 docker run --rm --read-only --network none --cap-drop=ALL \
   --user 10001:10001 \
   --mount type=volume,src=bchforge-electron-cash-data,dst=/data,readonly \
-  --entrypoint /bin/bash electron-cash:4.4.5 \
+  --entrypoint /bin/bash electron-cash:4.4.6 \
   -c 'find /data -maxdepth 3 -print'
 ```
 
@@ -98,6 +104,16 @@ restoration remain planned for `v0.3`.
 
 Electron Cash routes SPV traffic through the internal `tor-proxy` service by
 default.
+
+Electron Cash Docker deliberately uses this standalone `tor-proxy` service
+instead of relying on a Tor daemon owned by the Electron Cash application. Tor
+is independently versioned, health-checked, restarted, and hardened in its own
+container boundary, without access to the wallet volume. Electron Cash and
+CashFusion explicitly consume its stable Docker-internal SOCKS endpoint at
+`tor-proxy:9050`; future components may reuse it only when explicitly
+configured. Electron Cash 4.4.6's upstream packaged Tor does not replace this
+service. This is not a transparent gateway: only traffic explicitly configured
+for `tor-proxy:9050` uses it.
 
 The `tor-proxy` image is a BCH Forge multi-stage build in
 [`docker/tor/`](docker/tor/). It downloads Tor `0.4.9.11` from the official Tor
@@ -147,6 +163,20 @@ docker compose ps
 docker compose logs -f electron-cash
 docker compose down
 ```
+
+When upgrading, compare your existing `.env` with the new `.env.example`
+before rebuilding. `.env` is a local file and is not updated by Git, so it may
+continue to select an older Electron Cash image after the repository has been
+updated. Preserve intentional local settings while updating the version and
+integrity pins rather than overwriting the whole file. Before starting the
+stack, confirm the resolved images:
+
+```bash
+docker compose --env-file .env config --images
+```
+
+For v0.1.3, this should include `electron-cash:4.4.6` and
+`bchforge/electron-cash-docker-tor:0.4.9.11`.
 
 The Electron Cash and noVNC versions in `.env` have matching commit and archive
 integrity pins. Update each version and all of its pins together. The Ubuntu
@@ -240,8 +270,6 @@ The unchecked releases are planned future project versions:
 
 - [x] `v0.1`: browser access, persistent wallet data, Tor, the CashFusion plugin
   with opt-in auto-fusion, and a test-only testnet4 override.
-- [x] `v0.1.2`: maintenance hardening of the auditable Tor source build; not a
-  feature expansion.
 - [ ] `v0.2`: secure plugin distribution, Flipstarter Helper, headless mode, and
   optional password-authenticated JSON-RPC disabled by default.
 - [ ] `v0.3`: HTTPS, Basic Auth, fail2ban, additional CashFusion defaults for
