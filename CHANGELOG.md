@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.3
+
+- Upgraded Electron Cash from 4.4.5 to 4.4.6 and updated its immutable commit
+  and release-archive SHA-256 pins.
+- Retained the standalone BCH Forge Tor 0.4.9.11 service as Electron Cash
+  Docker's Tor runtime authority; the upstream packaged Tor update does not
+  change this boundary.
+- Documented the standalone Tor architecture and its explicit
+  `tor-proxy:9050` consumers.
+- Added regression validation that checks the resolved image tag and installed
+  Electron Cash package version, alongside the existing Tor, CashFusion,
+  persistence, noVNC, and testnet4 acceptance coverage.
+
 ## v0.1.2
 
 - Replaced the third-party `dockurr/tor` runtime dependency with a repository-

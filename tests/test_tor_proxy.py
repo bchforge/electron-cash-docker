@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -434,6 +435,10 @@ def test_runtime() -> None:
             electron_top = run(["docker", "top", electron_container, "-eo", "user,pid,ppid,args"])
             assert electron_top.returncode == 0
             assert "root" not in electron_top.stdout.lower()
+            assert not any(
+                re.search(r"(?:^|\s)(?:\S*/)?tor(?:\s|$)", line)
+                for line in electron_top.stdout.splitlines()[1:]
+            ), electron_top.stdout
 
             sentinel = "/home/electroncash/.electron-cash/.v012-tor-persistence"
             write = compose_exec(

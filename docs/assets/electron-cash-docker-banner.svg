@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 120" role="img" aria-labelledby="title desc">
+  <title id="title">BCH Forge FundMe banner</title>
+  <desc id="desc">Campaign banner for BCH Forge and Electron Cash Docker.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="500" y2="120" gradientUnits="userSpaceOnUse"><stop stop-color="#081114"/><stop offset="1" stop-color="#10252b"/></linearGradient>
+  </defs>
+  <rect width="500" height="120" rx="18" fill="url(#bg)"/>
+  <circle cx="430" cy="18" r="142" fill="#0ac18e" opacity=".12"/>
+  <g transform="translate(24 22) scale(.594)">
+    <rect width="128" height="128" rx="30" fill="#081114"/>
+    <path d="M64 14 104 37v54l-40 23-40-23V37l40-23Z" fill="none" stroke="#829592" stroke-width="4" stroke-linejoin="round"/>
+    <g fill="none" stroke="#edf4f2" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">
+      <path d="M45 38v58M45 38h45M45 63h35"/>
+    </g>
+    <g fill="#081114" stroke="#edf4f2" stroke-width="3">
+      <circle cx="45" cy="38" r="6" fill="#18d8a3"/>
+      <circle cx="90" cy="38" r="6"/>
+      <circle cx="45" cy="63" r="6"/>
+      <circle cx="80" cy="63" r="6" fill="#18d8a3"/>
+      <circle cx="45" cy="96" r="6"/>
+    </g>
+  </g>
+  <text x="122" y="51" fill="#f3f8f7" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="31" font-weight="850" letter-spacing="-1.2">BCH Forge</text>
+  <text x="124" y="80" fill="#18d8a3" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="800" letter-spacing="1.6">ELECTRON CASH DOCKER</text>
+  <text x="124" y="102" fill="#a6b6b5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600">Self-custody tools for Bitcoin Cash</text>
+</svg>
