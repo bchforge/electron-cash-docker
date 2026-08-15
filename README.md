@@ -9,6 +9,11 @@ the Bitcoin Cash SPV wallet, for a local browser through noVNC. It includes
 persistent wallet data, Tor networking, and a default-enabled CashFusion plugin
 with opt-in automatic fusion.
 
+> **Funding v0.2 → v1.0:** Electron Cash Docker v0.1 is already public. The
+> current FundMe.Cash campaign funds the work to complete, validate, document,
+> package, and publish v0.2, v0.3, v0.4, and v1.0.
+> [Support the campaign on FundMe.Cash](https://fundme.cash/campaign/154).
+
 ## Current v0.1 Scope
 
 `v0.1.3` is the current maintenance release within the existing `v0.1` scope.
