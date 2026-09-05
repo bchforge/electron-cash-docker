@@ -9,20 +9,15 @@ the Bitcoin Cash SPV wallet, for a local browser through noVNC. It includes
 persistent wallet data, Tor networking, and a default-enabled CashFusion plugin
 with opt-in automatic fusion.
 
-> **Funding v0.2 → v1.0:** Electron Cash Docker v0.1 is already public. The
-> current FundMe.Cash campaign funds the work to complete, validate, document,
-> package, and publish v0.2, v0.3, v0.4, and v1.0.
-> [Support the campaign on FundMe.Cash](https://fundme.cash/campaign/154).
-
 ## Current v0.1 Scope
 
-`v0.1.3` is the current maintenance release within the existing `v0.1` scope.
-It upgrades Electron Cash to 4.4.6, retains the standalone BCH Forge Tor
-0.4.9.11 service, and clarifies that service's architecture. It continues to
-provide local browser access, persistent Electron Cash data, Tor for explicitly
-configured SPV and CashFusion traffic, the default-enabled CashFusion plugin
-with opt-in auto-fusion, and a test-only testnet4 override. v0.1.3 does not
-expand the v0.1 product scope.
+`v0.1.4` is the current maintenance release within the existing `v0.1` scope.
+It retains Electron Cash 4.4.6, the standalone BCH Forge Tor 0.4.9.11 service,
+and the existing local browser runtime while improving noVNC connection
+reliability. It continues to provide local browser access, persistent Electron
+Cash data, Tor for explicitly configured SPV and CashFusion traffic, the
+default-enabled CashFusion plugin with opt-in auto-fusion, and a test-only
+testnet4 override. v0.1.4 does not expand the v0.1 product scope.
 
 Electron Cash Docker is developed as an independent open-source project.
 Planned features are organized by release and are not part of `v0.1`.
@@ -180,7 +175,7 @@ stack, confirm the resolved images:
 docker compose --env-file .env config --images
 ```
 
-For v0.1.3, this should include `electron-cash:4.4.6` and
+For v0.1.4, this should include `electron-cash:4.4.6` and
 `bchforge/electron-cash-docker-tor:0.4.9.11`.
 
 The Electron Cash and noVNC versions in `.env` have matching commit and archive
