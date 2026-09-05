@@ -435,11 +435,11 @@ start_novnc() {
 
     openbox-session &
     OPENBOX_PID=$!
-    x11vnc -display :99 -forever -alwaysshared -nopw -rfbport 5900 &
+    x11vnc -display :99 -forever -shared -nopw -rfbport 5900 &
     X11VNC_PID=$!
     wait_for_port localhost 5900 "x11vnc" || return 1
 
-    websockify --web=/opt/noVNC 6080 localhost:5900 &
+    websockify --heartbeat 30 --web=/opt/noVNC 6080 localhost:5900 &
     WEBSOCKIFY_PID=$!
     wait_for_port localhost 6080 "noVNC" || return 1
 

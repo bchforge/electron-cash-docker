@@ -128,6 +128,10 @@ RUN groupadd --gid 10001 electroncash && \
     chown -R electroncash:electroncash /home/electroncash
 
 COPY docker/novnc-index.html /opt/noVNC/index.html
+COPY docker/novnc-keepalive.js /opt/noVNC/novnc-keepalive.js
+
+RUN python3 -c 'from pathlib import Path; path=Path("/opt/noVNC/vnc.html"); text=path.read_text(encoding="utf-8"); marker="<script src=\"/novnc-keepalive.js\"></script>"; assert marker not in text; assert "</head>" in text; path.write_text(text.replace("</head>", "  " + marker + "\n</head>", 1), encoding="utf-8")'
+
 COPY --chown=electroncash:electroncash docker/entrypoint.sh /home/electroncash/entrypoint.sh
 COPY --chown=electroncash:electroncash docker/cashfusion.sh /home/electroncash/cashfusion.sh
 COPY --chown=electroncash:electroncash docker/electroncash-wrapper.py /home/electroncash/electroncash-wrapper.py
