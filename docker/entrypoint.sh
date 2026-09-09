@@ -6,11 +6,21 @@ export HOME=/home/electroncash
 export DISPLAY=:99
 export XDG_RUNTIME_DIR=/tmp/runtime-electroncash
 
-USE_TOR=${USE_TOR}
+MODE=${MODE:-novnc}
+USE_TOR=${USE_TOR:?USE_TOR must be set}
 TESTNET4=${TESTNET4:-false}
 WALLET_AUTO_CREATE=${WALLET_AUTO_CREATE:-false}
 TEST_WALLET_PASSWORD=${TEST_WALLET_PASSWORD:-}
 ELECTRONCASH_RUNTIME=${ELECTRONCASH_RUNTIME:-false}
+JSONRPC_ENABLED=${JSONRPC_ENABLED:-false}
+JSONRPC_USER=${JSONRPC_USER:-}
+JSONRPC_PASSWORD=${JSONRPC_PASSWORD:-}
+JSONRPC_PORT=${JSONRPC_PORT:-50001}
+
+case "${MODE}" in
+    novnc|headless) ;;
+    *) echo "[!] MODE must be novnc or headless"; exit 1 ;;
+esac
 
 case "${USE_TOR}" in
     true|false) ;;
@@ -26,6 +36,38 @@ case "${TEST_WALLET_PASSWORD}" in
         exit 1
         ;;
 esac
+
+case "${JSONRPC_ENABLED}" in
+    true|false) ;;
+    *) echo "[!] JSONRPC_ENABLED must be true or false"; exit 1 ;;
+esac
+if [ "${JSONRPC_ENABLED}" = "true" ]; then
+    if [ "${MODE}" != "headless" ]; then
+        echo "[!] JSON-RPC is supported only in headless mode"
+        exit 1
+    fi
+    if [ -z "${JSONRPC_PASSWORD}" ]; then
+        echo "[!] JSONRPC_ENABLED=true requires a non-empty JSONRPC_PASSWORD"
+        exit 1
+    fi
+    if [ -z "${JSONRPC_USER}" ]; then
+        echo "[!] JSONRPC_ENABLED=true requires a non-empty JSONRPC_USER"
+        exit 1
+    fi
+    case "${JSONRPC_USER}" in
+        *[!A-Za-z0-9._-]*) echo "[!] JSONRPC_USER contains unsupported characters"; exit 1 ;;
+    esac
+    case "${JSONRPC_PASSWORD}" in
+        *$'\n'*|*$'\r'*) echo "[!] JSONRPC_PASSWORD must not contain newlines"; exit 1 ;;
+    esac
+fi
+case "${JSONRPC_PORT}" in
+    ''|*[!0-9]*) echo "[!] JSONRPC_PORT must be numeric"; exit 1 ;;
+esac
+if [ "${JSONRPC_PORT}" -lt 1 ] || [ "${JSONRPC_PORT}" -gt 65535 ]; then
+    echo "[!] JSONRPC_PORT must be between 1 and 65535"
+    exit 1
+fi
 
 readonly WALLET_ROOT=/home/electroncash/.electron-cash
 readonly WALLET_MARKER=${WALLET_ROOT}/.electron-cash-docker
@@ -193,6 +235,10 @@ if [ "$(id -u)" -ne 10001 ] || [ "$(id -g)" -ne 10001 ]; then
     exit 1
 fi
 
+# Keep the credential out of child process environments unless explicitly
+# passed to the short-lived config writer below.
+export -n JSONRPC_PASSWORD 2>/dev/null || true
+
 XVFB_PID=""
 OPENBOX_PID=""
 X11VNC_PID=""
@@ -355,6 +401,156 @@ finally:
 PY
 }
 
+configure_jsonrpc() {
+    CONFIG_FILE="${CONFIG_FILE}" \
+    JSONRPC_ENABLED="${JSONRPC_ENABLED}" \
+    JSONRPC_USER="${JSONRPC_USER}" \
+    JSONRPC_PASSWORD="${JSONRPC_PASSWORD}" \
+    JSONRPC_PORT="${JSONRPC_PORT}" \
+        python3 - <<'PY'
+import json
+import os
+import tempfile
+
+path = os.environ["CONFIG_FILE"]
+directory = os.path.dirname(path) or "."
+with open(path) as handle:
+    config = json.load(handle)
+
+if os.environ["JSONRPC_ENABLED"] == "true":
+    config["rpcuser"] = os.environ["JSONRPC_USER"]
+    config["rpcpassword"] = os.environ["JSONRPC_PASSWORD"]
+    config["rpcport"] = int(os.environ["JSONRPC_PORT"])
+    # The host-side Compose mapping is the public exposure boundary. The
+    # daemon must listen on the container interface to be reachable there.
+    config["rpchost"] = "0.0.0.0"
+else:
+    # Keep Electron Cash's local daemon transport disabled without retaining
+    # any credential value in the persisted configuration.
+    config["rpcuser"] = ""
+    config["rpcpassword"] = ""
+    config["rpcport"] = 0
+    config["rpchost"] = "127.0.0.1"
+
+fd, temporary_path = tempfile.mkstemp(prefix=".config.", dir=directory)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(config, handle, indent=4, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary_path, 0o600)
+    os.replace(temporary_path, path)
+finally:
+    if os.path.exists(temporary_path):
+        os.unlink(temporary_path)
+PY
+}
+
+preload_plugins() {
+    local source_dir=/preinstalled-plugins
+    local manifest=${source_dir}/plugins.json
+    local destination_dir=${CONFIG_DIR}/external_plugins
+
+    if [ ! -f "${manifest}" ]; then
+        echo "[!] Trusted plugin manifest is missing from the image"
+        return 1
+    fi
+
+    mkdir -p "${destination_dir}"
+    PLUGIN_DATA=$(python3 - "${manifest}" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    plugins = json.load(handle).get("plugins")
+if not isinstance(plugins, list) or not plugins:
+    raise SystemExit("[!] Trusted plugin manifest is empty")
+for plugin in plugins:
+    package = plugin.get("package_name")
+    version = plugin.get("version")
+    digest = plugin.get("sha256")
+    if not isinstance(package, str) or not package or not isinstance(version, str):
+        raise SystemExit("[!] Trusted plugin manifest has invalid identity")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise SystemExit(f"[!] Trusted plugin {package} has an invalid SHA-256")
+    if not isinstance(plugin.get("enabled"), bool):
+        raise SystemExit(f"[!] Trusted plugin {package} has an invalid activation flag")
+    print("\t".join((package, version, digest, str(plugin["enabled"]).lower())))
+PY
+)
+
+    while IFS=$'\t' read -r package version expected_hash enabled; do
+        [ -n "${package}" ] || continue
+        local source_file="${source_dir}/${package}-${version}.zip"
+        local destination_file="${destination_dir}/${package}-${version}.zip"
+        if [ ! -f "${source_file}" ]; then
+            echo "[!] Trusted plugin artifact is missing: ${source_file}"
+            return 1
+        fi
+        if [ "$(sha256sum "${source_file}" | cut -d' ' -f1)" != "${expected_hash}" ]; then
+            echo "[!] Trusted plugin artifact failed image verification: ${package}"
+            return 1
+        fi
+
+        if [ -L "${destination_file}" ]; then
+            rm -f "${destination_file}"
+        elif [ -e "${destination_file}" ] && [ ! -f "${destination_file}" ]; then
+            echo "[!] Plugin destination is not a regular file: ${destination_file}"
+            return 1
+        elif [ -f "${destination_file}" ] && \
+            [ "$(sha256sum "${destination_file}" | cut -d' ' -f1)" != "${expected_hash}" ]; then
+            echo "[!] Removing unverified existing plugin: ${destination_file}"
+            rm -f "${destination_file}"
+        fi
+
+        if [ ! -f "${destination_file}" ]; then
+            local temporary_file="${destination_file}.tmp.$$"
+            cp "${source_file}" "${temporary_file}"
+            if [ "$(sha256sum "${temporary_file}" | cut -d' ' -f1)" != "${expected_hash}" ]; then
+                rm -f "${temporary_file}"
+                echo "[!] Plugin copy failed verification: ${package}"
+                return 1
+            fi
+            chmod 600 "${temporary_file}"
+            mv -f "${temporary_file}" "${destination_file}"
+            echo "[+] Verified plugin installed: ${package} v${version}"
+        fi
+    done <<< "${PLUGIN_DATA}"
+
+    CONFIG_FILE="${CONFIG_FILE}" PLUGIN_MANIFEST="${manifest}" python3 - <<'PY'
+import json
+import os
+import tempfile
+
+config_path = os.environ["CONFIG_FILE"]
+with open(config_path) as handle:
+    config = json.load(handle)
+with open(os.environ["PLUGIN_MANIFEST"]) as handle:
+    manifest = json.load(handle)
+
+changed = False
+for plugin in manifest["plugins"]:
+    key = "use_external_" + plugin["package_name"]
+    if plugin["enabled"] and config.get(key) is not True:
+        config[key] = True
+        changed = True
+if changed:
+    directory = os.path.dirname(config_path) or "."
+    fd, temporary_path = tempfile.mkstemp(prefix=".config.", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(config, handle, indent=4, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, config_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+PY
+}
+
 ensure_test_wallet() {
     if [ "${WALLET_AUTO_CREATE}" != "true" ]; then
         return 0
@@ -418,6 +614,61 @@ PY
     chmod 600 "${CONFIG_FILE}" "${WALLET_FILE}"
 }
 
+start_headless() {
+    echo "[*] Starting Electron Cash daemon without the GUI stack"
+    local command=(/opt/electroncash-venv/bin/python /home/electroncash/electroncash-daemon-wrapper.py)
+    if [ -n "${EC_NET_FLAG}" ]; then
+        command+=("${EC_NET_FLAG}")
+    fi
+    if [ -f "${WALLET_FILE}" ]; then
+        command+=(--wallet "${WALLET_FILE}")
+    fi
+    command+=(daemon --verbose)
+    "${command[@]}" &
+    ELECTRONCASH_PID=$!
+
+    local cli=(/opt/electroncash-venv/bin/electron-cash)
+    if [ -n "${EC_NET_FLAG}" ]; then
+        cli+=("${EC_NET_FLAG}")
+    fi
+    local attempts=0
+    while ! "${cli[@]}" daemon status >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ "${attempts}" -ge 30 ]; then
+            echo "[!] Electron Cash daemon did not become ready"
+            return 1
+        fi
+        sleep 1
+    done
+    echo "[+] Electron Cash daemon ready"
+
+    if [ -f "${WALLET_FILE}" ]; then
+        local load_cli=("${cli[@]}")
+        if [ -n "${TEST_WALLET_PASSWORD}" ]; then
+            # This short-lived CLI call is the only process that receives the
+            # disposable test-wallet password; the daemon never gets it.
+            load_cli+=(-wp "${TEST_WALLET_PASSWORD}")
+        fi
+        if "${load_cli[@]}" daemon load_wallet >/dev/null 2>&1; then
+            echo "[+] Headless wallet loaded"
+        elif [ -z "${TEST_WALLET_PASSWORD}" ] && /opt/electroncash-venv/bin/python - "${WALLET_FILE}" <<'PY' >/dev/null 2>&1
+from electroncash.storage import WalletStorage
+import sys
+
+storage = WalletStorage(sys.argv[1], manual_upgrades=True)
+raise SystemExit(0 if storage.is_encrypted() else 1)
+PY
+        then
+            echo "[*] Encrypted production wallet requires operator unlock"
+        else
+            echo "[!] Wallet could not be loaded by the headless daemon"
+            return 1
+        fi
+    else
+        echo "[*] No wallet supplied; encrypted production wallets remain operator-loaded"
+    fi
+}
+
 start_novnc() {
     echo "[*] Starting v0.1 noVNC wallet"
 
@@ -453,11 +704,17 @@ start_novnc() {
 }
 
 echo "=========================================="
-echo "  Electron Cash Docker v0.1"
+echo "  Electron Cash Docker v0.2"
+echo "  Mode:    ${MODE}"
 echo "  Network: ${NETWORK_LABEL}"
 echo "  Tor:     ${USE_TOR}"
 echo "  Fusion:  ${CASHFUSION_ENABLED}"
 echo "  AutoFuse:${CASHFUSION_AUTO_FUSE:-false}"
+if [ "${JSONRPC_ENABLED}" = "true" ]; then
+    echo "  RPC:     enabled on port ${JSONRPC_PORT}"
+else
+    echo "  RPC:     disabled"
+fi
 echo "=========================================="
 
 verify_wallet_root
@@ -467,7 +724,13 @@ chmod 700 "${XDG_RUNTIME_DIR}"
 
 ensure_config
 ensure_test_wallet
+configure_jsonrpc
 CONFIG_FILE="${CONFIG_FILE}" /home/electroncash/cashfusion.sh
-start_novnc
+preload_plugins
+
+case "${MODE}" in
+    novnc) start_novnc ;;
+    headless) start_headless ;;
+esac
 
 wait "${ELECTRONCASH_PID}"

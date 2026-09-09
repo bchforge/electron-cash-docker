@@ -16,9 +16,14 @@ services:
     ports:
       - "${NOVNC_BIND:?NOVNC_BIND must be set in .env}:${NOVNC_HOST_PORT:?NOVNC_HOST_PORT must be set in .env}:6080"
     environment:
+      MODE: ${MODE:-novnc}
       USE_TOR: ${USE_TOR:?USE_TOR must be set in .env}
       CASHFUSION_ENABLED: ${CASHFUSION_ENABLED:?CASHFUSION_ENABLED must be set in .env}
       CASHFUSION_AUTO_FUSE: ${CASHFUSION_AUTO_FUSE:?CASHFUSION_AUTO_FUSE must be set in .env}
+      JSONRPC_ENABLED: ${JSONRPC_ENABLED:-false}
+      JSONRPC_USER: ${JSONRPC_USER:-}
+      JSONRPC_PASSWORD: ${JSONRPC_PASSWORD:-}
+      JSONRPC_PORT: ${JSONRPC_PORT:-50001}
       WALLET_AUTO_CREATE: ${WALLET_AUTO_CREATE:-false}
       TEST_WALLET_PASSWORD: ${TEST_WALLET_PASSWORD:-}
     volumes:

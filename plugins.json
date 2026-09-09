@@ -1,0 +1,14 @@
+{
+    "plugins": [
+        {
+            "package_name": "flipstarter",
+            "source": "https://gitlab.com/flipstarter/flipstarter-electron-cash",
+            "artifact": "https://gitlab.com/flipstarter/flipstarter-electron-cash/-/archive/v1.5.0/flipstarter-electron-cash-v1.5.0.tar.gz",
+            "version": "1.5",
+            "archive_root": "flipstarter-electron-cash-v1.5.0",
+            "archive_sha256": "d91e6a8e3203c93231ba1eb883103befb25159cea45362b1af83fc7037182723",
+            "sha256": "e2da7ebbefaa1c9ad0ace7cc152b6eb54c0e992631c46d0c0eacb0bf71706f41",
+            "enabled": true
+        }
+    ]
+}
