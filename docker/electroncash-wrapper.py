@@ -52,26 +52,28 @@ def install_shutdown_timer():
 
 
 def apply_cashfusion_autofuse(wallet, enabled, auto_fuse):
-    if not enabled:
-        return False
+    from cashfusion_autofuse import apply_cashfusion_autofuse as apply
 
-    from electroncash_plugins.fusion.conf import Conf
-
-    conf = Conf(wallet)
-    if conf.autofuse == auto_fuse:
-        return False
-
-    conf.autofuse = auto_fuse
-    wallet.storage.write()
-    wallet.print_error(f"[fusion] environment autofuse set to {auto_fuse}")
-    return True
+    return apply(wallet, enabled, auto_fuse)
 
 
 def patch_cashfusion_plugin_class(plugin_class, enabled, auto_fuse, test_password=""):
     if getattr(plugin_class, "_docker_autofuse_patched", False):
         return
 
+    original_add_wallet = plugin_class.add_wallet
     original_on_new_window = plugin_class.on_new_window
+
+    @wraps(original_add_wallet)
+    def add_wallet(plugin, wallet, password=None):
+        try:
+            # Upstream add_wallet() starts auto-fusing from the persisted flag.
+            # Apply the deployment default immediately before that decision,
+            # while leaving later GUI opt-in available.
+            apply_cashfusion_autofuse(wallet, enabled, auto_fuse)
+        except Exception as error:
+            wallet.print_error(f"[fusion] failed to apply environment autofuse: {error}")
+        return original_add_wallet(plugin, wallet, password)
 
     @wraps(original_on_new_window)
     def on_new_window(plugin, window):
@@ -86,6 +88,7 @@ def patch_cashfusion_plugin_class(plugin_class, enabled, auto_fuse, test_passwor
                 wallet.print_error(f"[fusion] failed to apply environment autofuse: {error}")
         return original_on_new_window(plugin, window)
 
+    plugin_class.add_wallet = add_wallet
     plugin_class.on_new_window = on_new_window
     plugin_class._docker_autofuse_patched = True
 

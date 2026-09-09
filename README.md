@@ -9,28 +9,41 @@ the Bitcoin Cash SPV wallet, for a local browser through noVNC. It includes
 persistent wallet data, Tor networking, and a default-enabled CashFusion plugin
 with opt-in automatic fusion.
 
-## Current v0.1 Scope
+## Current v0.2 Scope
 
-`v0.1.4` is the current maintenance release within the existing `v0.1` scope.
-It retains Electron Cash 4.4.6, the standalone BCH Forge Tor 0.4.9.11 service,
+Starting from the accepted `v0.1.4` baseline, v0.2 adds:
+
+- A build-time verified external-plugin supply chain with explicit source,
+  release version, archive SHA-256, and deterministic ZIP SHA-256.
+- The official Flipstarter Helper plugin at v1.5.0, enabled by the trusted
+  manifest and compatible with Electron Cash 4.4.6.
+- An explicit headless Electron Cash daemon mode without the graphical stack.
+- Optional Electron Cash JSON-RPC, disabled by default and exposed only through
+  the explicit localhost-only RPC Compose override with a required password.
+
+The normal GUI/noVNC deployment retains the v0.1.4 behavior and is the final
+inspection mode.
+
+`v0.1.4` is the baseline maintenance release within the existing `v0.1` scope.
+It retained Electron Cash 4.4.6, the standalone BCH Forge Tor 0.4.9.11 service,
 and the existing local browser runtime while improving noVNC connection
 reliability. It continues to provide local browser access, persistent Electron
 Cash data, Tor for explicitly configured SPV and CashFusion traffic, the
 default-enabled CashFusion plugin with opt-in auto-fusion, and a test-only
-testnet4 override. v0.1.4 does not expand the v0.1 product scope.
+testnet4 override.
 
 Electron Cash Docker is developed as an independent open-source project.
-Planned features are organized by release and are not part of `v0.1`.
+Additional features are organized by later release and are not part of `v0.2`.
 
-## v0.1 Demo
+## Demo
 
-![Electron Cash Docker v0.1 testnet4 demo](docs/assets/electron-cash-docker-v0.1-testnet4-demo.gif)
+![Electron Cash Docker testnet4 demo](docs/assets/electron-cash-docker-demo.gif)
 
-This demonstration uses testnet4, whose funds have no monetary value. It shows
-the real Electron Cash interface, two confirmed test transactions, SPV traffic
-configured through Tor, the CashFusion plugin enabled and configured for Tor
-with automatic fusion remaining opt-in, and wallet data persisting across a
-container restart. No live CashFusion round was performed.
+This demonstration uses testnet4, whose coins have no monetary value. It shows
+the real Electron Cash Docker browser interface with isolated disposable test
+data, the testnet4 network view, Tor and CashFusion configuration, and the
+verified Flipstarter external plugin. Automatic fusion remains opt-in; no real
+BCH or live CashFusion round is involved.
 
 ## Quick Start
 
@@ -60,6 +73,70 @@ access instead of changing existing data recursively.
 The Tor image is built locally during `docker compose build` from the pinned
 Tor Project source release; no third-party Tor container image is pulled. Tor
 client state is stored separately in `bchforge-electron-cash-tor-data`.
+
+### Verified Plugins
+
+The root [`plugins.json`](plugins.json) is the trusted plugin manifest. Each
+entry records the upstream source, release version, source archive SHA-256,
+deterministic plugin ZIP SHA-256, and activation state.
+The Docker build fetches the exact archive, verifies it before extraction,
+validates the plugin metadata, creates a deterministic ZIP, and fails closed on
+either digest mismatch. The runtime verifies the image artifact again before
+copying it to Electron Cash's network-specific `external_plugins` directory.
+
+The only bundled external plugin in v0.2 is Flipstarter Helper v1.5.0 from
+[`flipstarter/flipstarter-electron-cash`](https://gitlab.com/flipstarter/flipstarter-electron-cash).
+It is a Qt plugin and is not represented as a headless CLI feature. The image
+does not download plugins at runtime and does not implement a plugin registry or
+marketplace.
+
+The build path can be checked without starting a container:
+
+```bash
+bash docker/plugins/build_plugins.sh
+bash docker/plugins/build_plugins.sh --verify-only
+```
+
+`--verify-only` requires an existing ZIP and never falls back to a remote
+artifact or a latest version.
+
+### Headless Mode
+
+Headless mode is an explicit alternative to the default GUI/noVNC mode. It uses
+the same Electron Cash image, named wallet volume, network-specific data path,
+CashFusion configuration, UID/GID, and Tor sidecar. It starts Electron Cash's
+upstream daemon through a Qt-free wrapper and does not start Xvfb, Openbox,
+x11vnc, or websockify.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.headless.yml up -d
+docker compose exec --user 10001:10001 electron-cash \
+  /opt/electroncash-venv/bin/electron-cash daemon status
+```
+
+An encrypted production wallet is not automatically unlocked. The supported
+security boundary is operator loading/unlocking through Electron Cash. The
+testnet4-only `WALLET_AUTO_CREATE` and `TEST_WALLET_PASSWORD` path remains
+available for disposable test runs only.
+
+### Optional JSON-RPC
+
+JSON-RPC is disabled in the default GUI deployment and in the plain headless
+override. Do not publish the RPC port by editing the normal Compose file. For a
+explicit RPC override and non-empty credentials in the ignored `.env` file:
+
+```bash
+docker compose -f docker-compose.yml \
+  -f docker-compose.headless.yml -f docker-compose.rpc.yml up -d
+```
+
+The daemon listens on its container interface, while Docker publishes the host
+socket only as `127.0.0.1:${JSONRPC_HOST_PORT:-50001}`. Missing, empty, malformed,
+or unsupported credentials fail before daemon startup. The password is not
+logged, put in command arguments, or included in generated URLs. Docker
+administrators may inspect the configured environment, including credentials,
+as part of the deployment's host-level trust boundary. Remove the RPC override
+and recreate the service to return to the default disabled state.
 
 ### Volume Management
 
@@ -175,7 +252,7 @@ stack, confirm the resolved images:
 docker compose --env-file .env config --images
 ```
 
-For v0.1.4, this should include `electron-cash:4.4.6` and
+For v0.2, this should include `electron-cash:4.4.6` and
 `bchforge/electron-cash-docker-tor:0.4.9.11`.
 
 The Electron Cash and noVNC versions in `.env` have matching commit and archive
@@ -199,9 +276,17 @@ After building the image, run the CashFusion state matrix with:
 python3 tests/test_cashfusion_states.py
 ```
 
-The current `v0.1` baseline is intentionally limited to the capabilities listed
-above. Future capabilities belong to their corresponding roadmap release and
-are added in order: `v0.2`, `v0.3`, `v0.4`, then `v1.0`.
+Run the capability-focused plugin, Flipstarter, headless, and JSON-RPC checks with:
+
+```bash
+python3 tests/test_plugin_distribution.py
+python3 tests/test_flipstarter_plugin.py
+python3 tests/test_headless.py
+python3 tests/test_rpc.py
+```
+
+The v0.1 persistence, Tor, CashFusion, noVNC, and testnet4 behavior remains the
+regression baseline for the v0.2 additions above.
 
 Source code and current project documentation are maintained in English.
 English and Spanish setup and security documentation is planned for `v1.0`.
@@ -224,9 +309,9 @@ English and Spanish setup and security documentation is planned for `v1.0`.
 - In `v0.1`, the internal passwordless VNC endpoint shares a Docker network with
   the bundled Tor proxy. Attach no additional containers to that network.
   Isolating internal GUI services is planned as part of `v1.0` hardening.
-- `v0.1` does not provide headless mode, JSON-RPC, X11/XQuartz, an external
-  plugin distribution system, additional bundled plugins, or hardware-wallet
-  passthrough.
+- v0.2 headless mode and optional JSON-RPC are supported release features. RPC
+  remains disabled by default and the password-protected host mapping is
+  localhost-only.
 
 ## Testnet4 Testing
 
@@ -265,12 +350,9 @@ testnet4.
 
 ## Release Roadmap
 
-The checked `v0.1` baseline and its v0.1.x maintenance releases are current.
-The unchecked releases are planned future project versions:
-
 - [x] `v0.1`: browser access, persistent wallet data, Tor, the CashFusion plugin
   with opt-in auto-fusion, and a test-only testnet4 override.
-- [ ] `v0.2`: secure plugin distribution, Flipstarter Helper, headless mode, and
+- [x] `v0.2`: secure plugin distribution, Flipstarter Helper, headless mode, and
   optional password-authenticated JSON-RPC disabled by default.
 - [ ] `v0.3`: HTTPS, Basic Auth, fail2ban, additional CashFusion defaults for
   target amount, fee budget, and minimum UTXO, plus encrypted backup and tested

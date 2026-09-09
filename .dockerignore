@@ -6,4 +6,9 @@
 !docker/novnc-index.html
 !docker/entrypoint.sh
 !docker/cashfusion.sh
+!docker/cashfusion_autofuse.py
 !docker/electroncash-wrapper.py
+!docker/electroncash-daemon-wrapper.py
+!docker/plugins/
+!docker/plugins/build_plugins.sh
+!plugins.json

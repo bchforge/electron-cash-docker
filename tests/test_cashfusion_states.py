@@ -187,6 +187,11 @@ def original_on_new_window(_plugin, window):
 
 original_on_new_window._is_ec_plugin_hook = True
 FusionPlugin.on_new_window = original_on_new_window
+
+def original_add_wallet(_plugin, wallet, _password=None):
+    observed["value_in_add_wallet"] = Conf(wallet).autofuse
+
+FusionPlugin.add_wallet = original_add_wallet
 wrapper.patch_cashfusion_plugin_class(
     FusionPlugin,
     os.environ["CASHFUSION_ENABLED"] == "true",
@@ -204,12 +209,14 @@ class Window:
         self.wallet = wallet
 
 FusionPlugin.on_new_window(FakePlugin(), Window(wallet))
+FusionPlugin.add_wallet(FakePlugin(), wallet)
 
 print("RESULT=" + json.dumps({
     "autofuse": Conf(wallet).autofuse,
     "encrypted_before": encrypted_before,
     "encrypted_after": storage.is_encrypted(),
     "value_in_original": observed["value_in_original"],
+    "value_in_add_wallet": observed["value_in_add_wallet"],
 }))
 '''
     output = docker_python(
@@ -219,6 +226,84 @@ print("RESULT=" + json.dumps({
             "CASHFUSION_ENABLED": str(enabled).lower(),
             "CASHFUSION_AUTO_FUSE": str(auto_fuse).lower(),
             "TEST_PASSWORD": PASSWORD,
+        },
+    )
+    for line in output.splitlines():
+        if line.startswith("RESULT="):
+            return json.loads(line.removeprefix("RESULT="))
+    raise AssertionError(f"No RESULT line found:\n{output}")
+
+
+def run_daemon_runtime_hook(volume, enabled, auto_fuse, encrypted):
+    code = r'''
+import importlib.util
+import json
+import os
+
+from electroncash.daemon import Daemon
+from electroncash.storage import WalletStorage
+from electroncash_plugins.fusion.conf import Conf
+
+spec = importlib.util.spec_from_file_location(
+    "electroncash_daemon_wrapper", "/home/electroncash/electroncash-daemon-wrapper.py"
+)
+wrapper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(wrapper)
+
+storage = WalletStorage("/case/default_wallet", manual_upgrades=True)
+encrypted_before = storage.is_encrypted()
+if encrypted_before:
+    storage.decrypt(os.environ["TEST_PASSWORD"])
+
+class Wallet:
+    def __init__(self, storage):
+        self.storage = storage
+
+    def print_error(self, *args):
+        pass
+
+wallet = Wallet(storage)
+observed = {}
+
+class FusionPlugin:
+    @staticmethod
+    def wallet_can_fuse(_wallet):
+        return True
+
+    def add_wallet(self, wallet, password=None):
+        observed["password"] = password
+        observed["autofuse_in_add_wallet"] = Conf(wallet).autofuse
+
+class Plugins:
+    def get_internal_plugin(self, name):
+        assert name == "fusion"
+        return FusionPlugin()
+
+class FakeDaemon:
+    plugins = Plugins()
+
+def original_load_wallet(_daemon, _path, password):
+    observed["password_in_load_wallet"] = password
+    return wallet
+
+Daemon.load_wallet = original_load_wallet
+wrapper.install_cashfusion_autofuse()
+loaded = Daemon.load_wallet(FakeDaemon(), "/case/default_wallet", "accepted-password")
+
+print("RESULT=" + json.dumps({
+    "autofuse": Conf(loaded).autofuse,
+    "encrypted_before": encrypted_before,
+    "encrypted_after": storage.is_encrypted(),
+    "observed": observed,
+}))
+'''
+    output = docker_python(
+        volume,
+        code,
+        env={
+            "TEST_PASSWORD": PASSWORD,
+            "CASHFUSION_ENABLED": str(enabled).lower(),
+            "CASHFUSION_AUTO_FUSE": str(auto_fuse).lower(),
         },
     )
     for line in output.splitlines():
@@ -247,6 +332,20 @@ def test_state(encrypted, enabled, auto_fuse):
         assert runtime["value_in_original"] is expected_autofuse
         assert runtime["encrypted_before"] is encrypted
         assert runtime["encrypted_after"] is encrypted
+        assert runtime["value_in_add_wallet"] is expected_autofuse
+
+        daemon_runtime = run_daemon_runtime_hook(
+            volume, enabled, auto_fuse, encrypted
+        )
+        assert daemon_runtime["autofuse"] is expected_autofuse
+        assert daemon_runtime["encrypted_before"] is encrypted
+        assert daemon_runtime["encrypted_after"] is encrypted
+        assert daemon_runtime["observed"]["password_in_load_wallet"] == "accepted-password"
+        if enabled:
+            assert daemon_runtime["observed"]["autofuse_in_add_wallet"] is expected_autofuse
+            assert daemon_runtime["observed"]["password"] == "accepted-password"
+        else:
+            assert "autofuse_in_add_wallet" not in daemon_runtime["observed"]
 
 
 def test_invalid_values():
@@ -313,6 +412,23 @@ def test_entrypoint_rejects_unsafe_values():
     )
     assert result.returncode == 1
     assert "USE_TOR" in result.stdout
+
+
+def test_entrypoint_rejects_missing_tor_setting():
+    result = run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-e",
+            "CASHFUSION_ENABLED=true",
+            "-e",
+            "CASHFUSION_AUTO_FUSE=false",
+            IMAGE,
+        ]
+    )
+    assert result.returncode == 1
+    assert "USE_TOR must be set" in result.stdout + result.stderr
 
 
 def test_entrypoint_rejects_missing_volume():
@@ -397,6 +513,7 @@ def main():
     test_invalid_values()
     test_invalid_config_is_preserved()
     test_entrypoint_rejects_unsafe_values()
+    test_entrypoint_rejects_missing_tor_setting()
     test_entrypoint_rejects_missing_volume()
     test_test_wallet_password_hook()
     test_mainnet_rejects_test_password()

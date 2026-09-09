@@ -1,0 +1,15 @@
+services:
+  electron-cash:
+    environment:
+      MODE: headless
+      JSONRPC_ENABLED: ${JSONRPC_ENABLED:-false}
+      JSONRPC_USER: ${JSONRPC_USER:-}
+      JSONRPC_PASSWORD: ${JSONRPC_PASSWORD:-}
+      JSONRPC_PORT: ${JSONRPC_PORT:-50001}
+    ports: !reset []
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'electroncash-daemon-wrapper|electron-cash daemon' > /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -64,6 +64,24 @@ RUN /opt/electroncash-venv/bin/pip install --no-cache-dir \
 RUN /opt/electroncash-venv/bin/python setup.py install \
     --single-version-externally-managed --root=/
 
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS plugin-builder
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    python3 \
+    tar \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build-plugins
+COPY plugins.json /build-plugins/plugins.json
+COPY docker/plugins/build_plugins.sh /build-plugins/build_plugins.sh
+RUN PLUGIN_MANIFEST=/build-plugins/plugins.json \
+    PLUGIN_OUTPUT_DIR=/build-plugins/zips \
+    bash /build-plugins/build_plugins.sh
+
 FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS runtime
 
 ARG NOVNC_VERSION
@@ -107,6 +125,8 @@ RUN curl -fsSL -o "/tmp/novnc-${NOVNC_VERSION}.tar.gz" \
     rm "/tmp/novnc-${NOVNC_VERSION}.tar.gz"
 
 COPY --from=builder /opt/electroncash-venv /opt/electroncash-venv
+COPY --from=plugin-builder /build-plugins/zips/ /preinstalled-plugins/
+COPY --from=plugin-builder /build-plugins/plugins.json /preinstalled-plugins/plugins.json
 
 RUN groupadd --gid 10001 electroncash && \
     useradd --uid 10001 --gid 10001 --create-home \
@@ -134,11 +154,14 @@ RUN python3 -c 'from pathlib import Path; path=Path("/opt/noVNC/vnc.html"); text
 
 COPY --chown=electroncash:electroncash docker/entrypoint.sh /home/electroncash/entrypoint.sh
 COPY --chown=electroncash:electroncash docker/cashfusion.sh /home/electroncash/cashfusion.sh
+COPY --chown=electroncash:electroncash docker/cashfusion_autofuse.py /home/electroncash/cashfusion_autofuse.py
 COPY --chown=electroncash:electroncash docker/electroncash-wrapper.py /home/electroncash/electroncash-wrapper.py
+COPY --chown=electroncash:electroncash docker/electroncash-daemon-wrapper.py /home/electroncash/electroncash-daemon-wrapper.py
 
 RUN chmod +x /home/electroncash/entrypoint.sh \
         /home/electroncash/cashfusion.sh \
-        /home/electroncash/electroncash-wrapper.py
+        /home/electroncash/electroncash-wrapper.py \
+        /home/electroncash/electroncash-daemon-wrapper.py
 
 ENV HOME=/home/electroncash
 WORKDIR /home/electroncash

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.2
+
+- Added the trusted external-plugin manifest and deterministic build-time source
+  and ZIP SHA-256 verification.
+- Added the official Flipstarter Helper v1.5.0 plugin from its pinned upstream
+  release archive and byte-level hashes. Runtime plugin installation re-verifies
+  the image artifact and never downloads plugins.
+- Added explicit headless daemon mode without Xvfb, Openbox, x11vnc, or
+  websockify, while retaining the named wallet volume, UID/GID, Tor sidecar,
+  testnet4 path, and CashFusion configuration.
+- Added optional upstream Electron Cash JSON-RPC. It is disabled by default,
+  requires a non-empty password when enabled, and is published only through the
+  explicit localhost-only RPC Compose override.
+
+## v0.1.4
+
+- Improved noVNC connection reliability with browser reconnect/keepalive support,
+  generated HTML newline correctness, and the 30-second websockify heartbeat.
+- Preserved shared, persistent x11vnc operation with `-forever -shared` and
+  graceful GUI shutdown.
+- Kept the accepted Electron Cash 4.4.6, BCH Forge Tor 0.4.9.11, named wallet
+  volume, CashFusion defaults, and testnet4 behavior unchanged.
+
 ## v0.1.3
 
 - Upgraded Electron Cash from 4.4.5 to 4.4.6 and updated its immutable commit
