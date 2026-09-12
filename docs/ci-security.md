@@ -23,9 +23,14 @@ manual units. A version, commit, archive hash, signature expectation, or
 packaged-artifact hash must not be updated independently.
 
 Dependency Review blocks newly introduced high or critical vulnerable
-dependencies when GitHub can identify a fix. CodeQL analyzes first-party Python
-and its results are reviewed as code-scanning findings, not treated as proof of
-an audit.
+dependencies when GitHub can identify a fix. One precise no-fix disposition is
+currently recorded for `ecdsa` / `GHSA-wj6h-64fc-37mp` (CVE-2024-23342): the
+upstream advisory lists no patched version, the package is an existing direct
+runtime pin, and no replacement was introduced without validating Electron Cash
+compatibility. This is an explicit maintainer-reviewed exception, not a claim
+that the package is safe; review it by 2026-12-31 or sooner if upstream ships a
+fix. CodeQL analyzes first-party Python and its results are reviewed as
+code-scanning findings, not treated as proof of an audit.
 
 ## Image Scanning
 
