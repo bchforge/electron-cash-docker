@@ -57,6 +57,10 @@ def test_novnc_uses_application_keepalive() -> None:
     assert 'marker="<script src=\\"/novnc-keepalive.js\\"></script>"' in dockerfile
 
 
+def test_heartbeat_target_script_is_valid_python() -> None:
+    compile(TARGET_SCRIPT, "heartbeat-target", "exec")
+
+
 def test_generated_novnc_html_has_clean_keepalive_injection() -> None:
     result = subprocess.run(
         [
@@ -272,17 +276,22 @@ class IdleEdge:
         self.thread.join(timeout=2)
 
 
-TARGET_SCRIPT = (
-    "import socket; "
-    "listener=socket.socket(); listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
-    "listener.bind(('0.0.0.0', 8765)); listener.listen(); "
-    "while True:\n"
-    "  client, _ = listener.accept();\n"
-    "  try:\n"
-    "    while client.recv(4096): pass\n"
-    "  finally:\n"
-    "    client.close()"
-)
+TARGET_SCRIPT = """\
+import socket
+
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("0.0.0.0", 8765))
+listener.listen()
+
+while True:
+    client, _ = listener.accept()
+    try:
+        while client.recv(4096):
+            pass
+    finally:
+        client.close()
+"""
 
 
 def run_target(network: str) -> str:

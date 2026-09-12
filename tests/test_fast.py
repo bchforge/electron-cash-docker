@@ -27,6 +27,7 @@ def main() -> None:
     test_novnc_sharing.test_x11vnc_uses_shared_server_mode()
     test_novnc_websocket_heartbeat.test_websockify_uses_30_second_heartbeat()
     test_novnc_websocket_heartbeat.test_novnc_uses_application_keepalive()
+    test_novnc_websocket_heartbeat.test_heartbeat_target_script_is_valid_python()
     test_plugin_distribution.test_manifest_schema_and_verification_wiring()
     test_plugin_distribution.test_manifest_rejects_missing_and_malformed_hashes()
     test_plugin_distribution.test_incorrect_zip_hash_fails_closed()
