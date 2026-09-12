@@ -32,6 +32,13 @@ that the package is safe; review it by 2026-12-31 or sooner if upstream ships a
 fix. CodeQL analyzes first-party Python and its results are reviewed as
 code-scanning findings, not treated as proof of an audit.
 
+The initial candidate scan found fixable protobuf vulnerabilities
+`CVE-2025-4565` and `CVE-2026-0994` in the preserved `5.28.2` pin. The smallest
+security-driven remediation is the direct `protobuf==5.29.6` pin; the Docker
+build's `pip check`, installed-environment checks, and full acceptance rerun
+are required evidence for that change. Other direct pins are not upgraded by
+this release.
+
 ## Image Scanning
 
 Trivy scans both freshly built candidate images at HIGH and CRITICAL severity.

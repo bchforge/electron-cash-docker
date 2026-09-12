@@ -15,6 +15,7 @@ import test_electron_cash_version
 import test_novnc_sharing
 import test_novnc_websocket_heartbeat
 import test_plugin_distribution
+import test_runtime_dependencies
 import test_tor_proxy
 
 
@@ -30,6 +31,7 @@ def main() -> None:
     test_plugin_distribution.test_manifest_rejects_missing_and_malformed_hashes()
     test_plugin_distribution.test_incorrect_zip_hash_fails_closed()
     test_plugin_distribution.test_runtime_plugin_path_has_no_download_or_latest_fallback()
+    test_runtime_dependencies.test_manifest_is_exact_runtime_authority()
     test_tor_proxy.test_static_provenance()
     print("PASS fast static regression checks")
 

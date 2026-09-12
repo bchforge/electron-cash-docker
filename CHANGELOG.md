@@ -10,6 +10,9 @@
 - Added GitHub Actions CI, Dependency Review, first-party Python CodeQL
   analysis, Dependabot configuration, and the public vulnerability-reporting
   policy.
+- Updated only the directly pinned protobuf package from `5.28.2` to `5.29.6`
+  after the candidate scan identified fixable high-severity vulnerabilities;
+  the remaining direct runtime pins are unchanged.
 - Preserved the existing Electron Cash, noVNC, Tor, plugin, GUI, headless, RPC,
   persistence, CashFusion, and testnet4 contracts. This is a maintenance
   baseline, not a new funded product milestone, and it is not a deployment.
