@@ -294,7 +294,7 @@ while True:
 """
 
 
-def run_target(network: str) -> str:
+def run_target(network: str) -> tuple[str, str]:
     container = unique_resource("heartbeat-target", kind="container")
     network_result = subprocess.run(
         ["docker", "network", "create", network],
@@ -344,12 +344,29 @@ def run_target(network: str) -> str:
             check=False,
         )
         if probe.returncode == 0:
-            return container
+            address = subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                    container,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert address.returncode == 0, address.stdout + address.stderr
+            target_address = address.stdout.strip()
+            assert target_address, "heartbeat target has no task-network address"
+            return container, f"{target_address}:8765"
         time.sleep(0.1)
     raise AssertionError("heartbeat target did not become ready")
 
 
-def run_websockify(port: int, network: str) -> tuple[subprocess.Popen[bytes], int]:
+def run_websockify(
+    port: int, network: str, target_address: str
+) -> tuple[subprocess.Popen[bytes], int]:
     process = subprocess.Popen(
         [
             "docker",
@@ -366,7 +383,7 @@ def run_websockify(port: int, network: str) -> tuple[subprocess.Popen[bytes], in
             "--heartbeat",
             "1",
             str(port),
-            "target:8765",
+            target_address,
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -408,8 +425,8 @@ def wait_for_edge_close(sock: socket.socket, seconds: float) -> bool:
 
 def test_application_keepalive_survives_control_frame_blind_edge() -> None:
     network = unique_resource("heartbeat-network", kind="network")
-    target = run_target(network)
-    process, upstream_port = run_websockify(free_port(), network)
+    target, target_address = run_target(network)
+    process, upstream_port = run_websockify(free_port(), network, target_address)
     edge = IdleEdge(upstream_port)
     edge.start()
     try:
