@@ -45,7 +45,7 @@ def tor_image() -> str:
     )
 
 
-def _register(kind: str, name: str) -> str:
+def register_resource(kind: str, name: str) -> str:
     registry = os.environ.get("CI_RESOURCE_REGISTRY")
     if registry:
         with open(registry, "a", encoding="utf-8") as handle:
@@ -55,9 +55,9 @@ def _register(kind: str, name: str) -> str:
 
 def unique_project(prefix: str) -> str:
     base = os.environ.get("CI_PROJECT_PREFIX", "bchforge-test")
-    return _register("project", f"{base}-{prefix}-{uuid.uuid4().hex}")
+    return register_resource("project", f"{base}-{prefix}-{uuid.uuid4().hex}")
 
 
-def unique_resource(prefix: str) -> str:
+def unique_resource(prefix: str, *, kind: str = "volume") -> str:
     base = os.environ.get("CI_PROJECT_PREFIX", "bchforge-test")
-    return _register("volume", f"{base}-{prefix}-{uuid.uuid4().hex}")
+    return register_resource(kind, f"{base}-{prefix}-{uuid.uuid4().hex}")

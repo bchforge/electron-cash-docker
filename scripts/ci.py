@@ -287,12 +287,18 @@ def cleanup_registry(registry: Path) -> None:
         return
     projects = []
     volumes = []
+    containers = []
+    networks = []
     for line in registry.read_text(encoding="utf-8").splitlines():
         kind, _, name = line.partition("\t")
         if kind == "project":
             projects.append(name)
         elif kind == "volume":
             volumes.append(name)
+        elif kind == "container":
+            containers.append(name)
+        elif kind == "network":
+            networks.append(name)
     for project in dict.fromkeys(projects):
         containers = run(
             ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}"]
@@ -306,6 +312,10 @@ def cleanup_registry(registry: Path) -> None:
             run(["docker", "network", "rm", *networks], timeout=120)
     if volumes:
         run(["docker", "volume", "rm", *dict.fromkeys(volumes)], timeout=120)
+    if containers:
+        run(["docker", "rm", "-f", *dict.fromkeys(containers)], timeout=120)
+    if networks:
+        run(["docker", "network", "rm", *dict.fromkeys(networks)], timeout=120)
 
 
 def acceptance() -> None:

@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from threading import Event, Thread
 
-from test_support import electron_cash_image
+from test_support import electron_cash_image, unique_resource
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -272,9 +272,57 @@ class IdleEdge:
         self.thread.join(timeout=2)
 
 
-def run_websockify(
-    port: int, target_port: int
-) -> tuple[subprocess.Popen[bytes], int]:
+TARGET_SCRIPT = (
+    "import socket; "
+    "listener=socket.socket(); listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
+    "listener.bind(('0.0.0.0', 8765)); listener.listen(); "
+    "while True:\n"
+    "  client, _ = listener.accept();\n"
+    "  try:\n"
+    "    while client.recv(4096): pass\n"
+    "  finally:\n"
+    "    client.close()"
+)
+
+
+def run_target(network: str) -> str:
+    container = unique_resource("heartbeat-target", kind="container")
+    network_result = subprocess.run(
+        ["docker", "network", "create", network],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert network_result.returncode == 0, network_result.stdout + network_result.stderr
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--pull=never",
+            "--rm",
+            "-d",
+            "--name",
+            container,
+            "--network",
+            network,
+            "--network-alias",
+            "target",
+            "--entrypoint",
+            "/usr/bin/python3",
+            IMAGE,
+            "-u",
+            "-c",
+            TARGET_SCRIPT,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return container
+
+
+def run_websockify(port: int, network: str) -> tuple[subprocess.Popen[bytes], int]:
     process = subprocess.Popen(
         [
             "docker",
@@ -282,16 +330,14 @@ def run_websockify(
             "--pull=never",
             "--rm",
             "--network",
-            "bridge",
-            "--add-host",
-            "host.docker.internal:host-gateway",
+            network,
             "--entrypoint",
             "/usr/bin/websockify",
             IMAGE,
             "--heartbeat",
             "1",
             str(port),
-            f"host.docker.internal:{target_port}",
+            "target:8765",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -306,6 +352,11 @@ def run_websockify(
                 raise AssertionError("websockify exited before becoming ready")
             time.sleep(0.1)
     process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
     raise AssertionError("websockify did not become ready")
 
 
@@ -327,9 +378,9 @@ def wait_for_edge_close(sock: socket.socket, seconds: float) -> bool:
 
 
 def test_application_keepalive_survives_control_frame_blind_edge() -> None:
-    target = TargetServer()
-    target.start()
-    process, upstream_port = run_websockify(free_port(), target.port)
+    network = unique_resource("heartbeat-network", kind="network")
+    target = run_target(network)
+    process, upstream_port = run_websockify(free_port(), network)
     edge = IdleEdge(upstream_port)
     edge.start()
     try:
@@ -361,7 +412,8 @@ def test_application_keepalive_survives_control_frame_blind_edge() -> None:
         application_data.close()
     finally:
         edge.close()
-        target.close()
+        run(["docker", "rm", "-f", target])
+        run(["docker", "network", "rm", network])
         process.terminate()
         try:
             process.wait(timeout=10)
