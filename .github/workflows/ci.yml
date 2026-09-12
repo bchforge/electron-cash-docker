@@ -33,7 +33,7 @@ jobs:
     permissions:
       contents: read
     env:
-      CI_REPORT_DIR: ${{ runner.temp }}/electron-cash-docker-v021-reports
+      CI_REPORT_DIR: ${{ github.workspace }}/.ci-reports
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -44,7 +44,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: electron-cash-docker-v021-reports-${{ github.run_id }}
-          path: ${{ runner.temp }}/electron-cash-docker-v021-reports
+          path: ${{ github.workspace }}/.ci-reports
           if-no-files-found: ignore
           retention-days: 5
 
