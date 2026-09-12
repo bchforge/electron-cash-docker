@@ -329,6 +329,8 @@ def run_websockify(port: int, network: str) -> tuple[subprocess.Popen[bytes], in
             "run",
             "--pull=never",
             "--rm",
+            "-p",
+            f"127.0.0.1:{port}:{port}",
             "--network",
             network,
             "--entrypoint",
