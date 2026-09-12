@@ -294,15 +294,8 @@ while True:
 """
 
 
-def run_target(network: str) -> tuple[str, str]:
+def run_target(port: int) -> str:
     container = unique_resource("heartbeat-target", kind="container")
-    network_result = subprocess.run(
-        ["docker", "network", "create", network],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert network_result.returncode == 0, network_result.stdout + network_result.stderr
     result = subprocess.run(
         [
             "docker",
@@ -312,10 +305,8 @@ def run_target(network: str) -> tuple[str, str]:
             "-d",
             "--name",
             container,
-            "--network",
-            network,
-            "--network-alias",
-            "target",
+            "-p",
+            f"127.0.0.1:{port}:{port}",
             "--entrypoint",
             "/usr/bin/python3",
             IMAGE,
@@ -344,47 +335,25 @@ def run_target(network: str) -> tuple[str, str]:
             check=False,
         )
         if probe.returncode == 0:
-            address = subprocess.run(
-                [
-                    "docker",
-                    "inspect",
-                    "--format",
-                    "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                    container,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            assert address.returncode == 0, address.stdout + address.stderr
-            target_address = address.stdout.strip()
-            assert target_address, "heartbeat target has no task-network address"
-            return container, f"{target_address}:8765"
+            return container
         time.sleep(0.1)
     raise AssertionError("heartbeat target did not become ready")
 
 
 def run_websockify(
-    port: int, network: str, target_address: str
+    port: int, target: str
 ) -> tuple[subprocess.Popen[bytes], int]:
     process = subprocess.Popen(
         [
             "docker",
-            "run",
-            "--pull=never",
-            "--rm",
-            "-p",
-            f"127.0.0.1:{port}:{port}",
-            "--network",
-            network,
-            "--entrypoint",
+            "exec",
+            target,
             "/usr/bin/websockify",
-            IMAGE,
             "--verbose",
             "--heartbeat",
             "1",
             str(port),
-            target_address,
+            "127.0.0.1:8765",
         ],
         stdout=subprocess.DEVNULL,
     )
@@ -424,9 +393,9 @@ def wait_for_edge_close(sock: socket.socket, seconds: float) -> bool:
 
 
 def test_application_keepalive_survives_control_frame_blind_edge() -> None:
-    network = unique_resource("heartbeat-network", kind="network")
-    target, target_address = run_target(network)
-    process, upstream_port = run_websockify(free_port(), network, target_address)
+    port = free_port()
+    target = run_target(port)
+    process, upstream_port = run_websockify(port, target)
     edge = IdleEdge(upstream_port)
     edge.start()
     try:
@@ -458,14 +427,13 @@ def test_application_keepalive_survives_control_frame_blind_edge() -> None:
         application_data.close()
     finally:
         edge.close()
-        subprocess.run(["docker", "rm", "-f", target], capture_output=True, check=False)
-        subprocess.run(["docker", "network", "rm", network], capture_output=True, check=False)
         process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
+        subprocess.run(["docker", "rm", "-f", target], capture_output=True, check=False)
 
 
 def main() -> None:
