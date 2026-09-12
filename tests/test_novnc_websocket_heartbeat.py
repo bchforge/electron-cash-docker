@@ -319,7 +319,25 @@ def run_target(network: str) -> str:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    return container
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        probe = subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "/usr/bin/python3",
+                "-c",
+                "import socket; socket.create_connection(('127.0.0.1', 8765), 0.2).close()",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return container
+        time.sleep(0.1)
+    raise AssertionError("heartbeat target did not become ready")
 
 
 def run_websockify(port: int, network: str) -> tuple[subprocess.Popen[bytes], int]:
@@ -414,8 +432,8 @@ def test_application_keepalive_survives_control_frame_blind_edge() -> None:
         application_data.close()
     finally:
         edge.close()
-        run(["docker", "rm", "-f", target])
-        run(["docker", "network", "rm", network])
+        subprocess.run(["docker", "rm", "-f", target], capture_output=True, check=False)
+        subprocess.run(["docker", "network", "rm", network], capture_output=True, check=False)
         process.terminate()
         try:
             process.wait(timeout=10)
