@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.1
+
+- Added canonical fast and complete CI validation with isolated candidate-image
+  builds, Compose resource guards, dependency checks, and bounded Trivy scans.
+- Moved the directly pinned runtime Python dependencies into `requirements.txt`
+  consumed by the real Docker build without changing their versions or package
+  set.
+- Added GitHub Actions CI, Dependency Review, first-party Python CodeQL
+  analysis, Dependabot configuration, and the public vulnerability-reporting
+  policy.
+- Updated only the directly pinned protobuf package from `5.28.2` to `5.29.6`
+  after the candidate scan identified fixable high-severity vulnerabilities;
+  the remaining direct runtime pins are unchanged.
+- Preserved the existing Electron Cash, noVNC, Tor, plugin, GUI, headless, RPC,
+  persistence, CashFusion, and testnet4 contracts. This is a maintenance
+  baseline, not a new funded product milestone, and it is not a deployment.
+
 ## v0.2
 
 - Added the trusted external-plugin manifest and deterministic build-time source

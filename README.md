@@ -230,6 +230,20 @@ availability of compatible servers.
 
 ## Operation And Development
 
+Canonical validation commands are shared by local development and GitHub
+Actions:
+
+```bash
+./scripts/ci.sh fast        # source/static checks; no container acceptance
+./scripts/ci.sh acceptance  # isolated uncached builds, scans, and runtime tests
+```
+
+The acceptance command requires the default local Docker context and refuses
+remote Docker endpoints. It builds unique candidate wallet and Tor image
+references and never uses a pre-existing production-style tag as test evidence.
+See [`docs/ci-security.md`](docs/ci-security.md) for the policy and known scan
+blind spots.
+
 Use the standard Compose lifecycle commands from the repository root:
 
 ```bash

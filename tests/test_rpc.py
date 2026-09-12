@@ -16,10 +16,12 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from test_support import electron_cash_image, unique_project, unique_resource
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
-IMAGE = "electron-cash:4.4.6"
+IMAGE = electron_cash_image()
 PYTHON = "/opt/electroncash-venv/bin/python"
 CLI = "/opt/electroncash-venv/bin/electron-cash"
 RPC_USER = "electroncash"
@@ -158,12 +160,12 @@ def test_default_rpc_is_disabled() -> None:
 
 
 def test_rpc_disabled_removes_stale_persisted_credentials() -> None:
-    project = f"bchforge-rpc-disabled-{uuid.uuid4().hex}"
+    project = unique_project("rpc-disabled")
     environment = compose_environment(enabled=False)
     with tempfile.TemporaryDirectory(prefix="bchforge-rpc-disabled-") as temporary:
         compose = compose_base(
             project,
-            write_volume_override(temporary, f"{project}-wallet", f"{project}-tor"),
+            write_volume_override(temporary, unique_resource("rpc-disabled-wallet"), unique_resource("rpc-disabled-tor")),
         )
         try:
             started = run([*compose, "up", "-d", "--no-build"], env=environment, timeout=120)
@@ -228,13 +230,13 @@ def test_rpc_missing_or_empty_credentials_fail_closed() -> None:
 
 
 def test_rpc_authentication_and_credential_exposure() -> None:
-    project = f"bchforge-rpc-{uuid.uuid4().hex}"
+    project = unique_project("rpc")
     rpc_port = free_port()
     environment = compose_environment(enabled=True, host_port=rpc_port)
     with tempfile.TemporaryDirectory(prefix="bchforge-rpc-") as temporary:
         compose = compose_base(
             project,
-            write_volume_override(temporary, f"{project}-wallet", f"{project}-tor"),
+            write_volume_override(temporary, unique_resource("rpc-wallet"), unique_resource("rpc-tor")),
             rpc=True,
         )
         try:

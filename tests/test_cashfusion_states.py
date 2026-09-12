@@ -8,6 +8,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from test_support import electron_cash_image, unique_resource
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_DEFAULTS = {}
@@ -15,7 +17,7 @@ for env_line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
     if "=" in env_line and not env_line.startswith("#"):
         env_key, env_value = env_line.split("=", 1)
         ENV_DEFAULTS[env_key] = env_value
-IMAGE = f"electron-cash:{ENV_DEFAULTS['EC_VERSION']}"
+IMAGE = electron_cash_image()
 PASSWORD = "cashfusion-test-password"
 PYTHON = "/opt/electroncash-venv/bin/python"
 
@@ -34,7 +36,7 @@ def run(command, *, env=None, input_text=None):
 
 @contextmanager
 def disposable_volume(prefix):
-    name = f"bchforge-test-{prefix}-{uuid.uuid4().hex}"
+    name = unique_resource(prefix)
     created = run(
         ["docker", "volume", "create", "--label", "com.bchforge.test=true", name]
     )

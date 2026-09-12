@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from test_support import electron_cash_image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
@@ -66,7 +68,7 @@ def test_compose_image(values: dict[str, str]) -> str:
     assert result.returncode == 0, result.stdout + result.stderr
     resolved = json.loads(result.stdout)
     image = resolved["services"]["electron-cash"]["image"]
-    assert image == f"electron-cash:{EXPECTED_VERSION}"
+    assert image == electron_cash_image()
     assert values["EC_VERSION"] == EXPECTED_VERSION
     return image
 

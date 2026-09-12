@@ -20,6 +20,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from test_support import electron_cash_image, tor_image, unique_project, unique_resource
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
@@ -38,8 +40,8 @@ def parse_env() -> dict[str, str]:
 ENV_DEFAULTS = parse_env()
 TOR_VERSION = ENV_DEFAULTS["TOR_VERSION"]
 TOR_SOURCE_SHA256 = ENV_DEFAULTS["TOR_SOURCE_SHA256"]
-TOR_IMAGE = f"bchforge/electron-cash-docker-tor:{TOR_VERSION}"
-EC_IMAGE = f"electron-cash:{ENV_DEFAULTS['EC_VERSION']}"
+TOR_IMAGE = tor_image()
+EC_IMAGE = electron_cash_image()
 
 
 def run(command: list[str], *, env=None, timeout=120) -> subprocess.CompletedProcess[str]:
@@ -319,9 +321,9 @@ def test_runtime() -> None:
     ec_image = run(["docker", "image", "inspect", EC_IMAGE])
     assert ec_image.returncode == 0, "build the Electron Cash image before running this suite"
 
-    project = f"bchforge-tor-{uuid.uuid4().hex}"
-    wallet_volume = f"bchforge-test-wallet-{uuid.uuid4().hex}"
-    tor_volume = f"bchforge-test-tor-state-{uuid.uuid4().hex}"
+    project = unique_project("tor")
+    wallet_volume = unique_resource("tor-wallet")
+    tor_volume = unique_resource("tor-state")
     port = free_port()
     environment = compose_environment(port)
     canonical_before = run(["docker", "volume", "inspect", "bchforge-electron-cash-data"])
