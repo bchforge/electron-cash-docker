@@ -11,11 +11,10 @@ import shlex
 import socket
 import subprocess
 import time
-import uuid
 from pathlib import Path
 from threading import Event, Thread
 
-from test_support import electron_cash_image, unique_resource
+from test_support import electron_cash_image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,10 +54,6 @@ def test_novnc_uses_application_keepalive() -> None:
     assert "new URL(socket.url, window.location.href).pathname === \"/websockify\"" in script
     assert "COPY docker/novnc-keepalive.js /opt/noVNC/novnc-keepalive.js" in dockerfile
     assert 'marker="<script src=\\"/novnc-keepalive.js\\"></script>"' in dockerfile
-
-
-def test_heartbeat_target_script_is_valid_python() -> None:
-    compile(TARGET_SCRIPT, "heartbeat-target", "exec")
 
 
 def test_generated_novnc_html_has_clean_keepalive_injection() -> None:
@@ -145,9 +140,7 @@ def websocket_connect(port: int) -> socket.socket:
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Key: {key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "Sec-WebSocket-Protocol: binary\r\n"
-        "\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
     ).encode("ascii")
     sock.sendall(request)
     response = read_http_headers(sock)
@@ -159,7 +152,7 @@ class TargetServer:
     def __init__(self) -> None:
         self.listener = socket.socket()
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.listener.bind(("0.0.0.0", 0))
+        self.listener.bind(("127.0.0.1", 0))
         self.listener.listen()
         self.port = self.listener.getsockname()[1]
         self.stop_event = Event()
@@ -278,86 +271,27 @@ class IdleEdge:
         self.thread.join(timeout=2)
 
 
-TARGET_SCRIPT = """\
-import socket
-
-listener = socket.socket()
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener.bind(("0.0.0.0", 8765))
-listener.listen()
-
-while True:
-    client, _ = listener.accept()
-    try:
-        while client.recv(4096):
-            pass
-    finally:
-        client.close()
-"""
-
-
-def run_target(port: int) -> str:
-    container = unique_resource("heartbeat-target", kind="container")
-    result = subprocess.run(
+def run_websockify(
+    port: int, target_port: int
+) -> tuple[subprocess.Popen[bytes], int]:
+    process = subprocess.Popen(
         [
             "docker",
             "run",
             "--pull=never",
             "--rm",
-            "-d",
-            "--name",
-            container,
-            "-p",
-            f"127.0.0.1:{port}:{port}",
+            "--network",
+            "host",
             "--entrypoint",
-            "/usr/bin/python3",
-            IMAGE,
-            "-u",
-            "-c",
-            TARGET_SCRIPT,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        probe = subprocess.run(
-            [
-                "docker",
-                "exec",
-                container,
-                "/usr/bin/python3",
-                "-c",
-                "import socket; socket.create_connection(('127.0.0.1', 8765), 0.2).close()",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if probe.returncode == 0:
-            return container
-        time.sleep(0.1)
-    raise AssertionError("heartbeat target did not become ready")
-
-
-def run_websockify(
-    port: int, target: str
-) -> tuple[subprocess.Popen[bytes], int]:
-    process = subprocess.Popen(
-        [
-            "docker",
-            "exec",
-            target,
             "/usr/bin/websockify",
-            "--verbose",
+            IMAGE,
             "--heartbeat",
             "1",
             str(port),
-            "127.0.0.1:8765",
+            f"127.0.0.1:{target_port}",
         ],
         stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -395,9 +329,9 @@ def wait_for_edge_close(sock: socket.socket, seconds: float) -> bool:
 
 
 def test_application_keepalive_survives_control_frame_blind_edge() -> None:
-    port = free_port()
-    target = run_target(port)
-    process, upstream_port = run_websockify(port, target)
+    target = TargetServer()
+    target.start()
+    process, upstream_port = run_websockify(free_port(), target.port)
     edge = IdleEdge(upstream_port)
     edge.start()
     try:
@@ -429,13 +363,13 @@ def test_application_keepalive_survives_control_frame_blind_edge() -> None:
         application_data.close()
     finally:
         edge.close()
+        target.close()
         process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
-        subprocess.run(["docker", "rm", "-f", target], capture_output=True, check=False)
 
 
 def main() -> None:
