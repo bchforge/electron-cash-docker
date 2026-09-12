@@ -15,13 +15,15 @@ import uuid
 from pathlib import Path
 from threading import Event, Thread
 
+from test_support import electron_cash_image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
 KEEPALIVE = ROOT / "docker" / "novnc-keepalive.js"
 ENV_FILE = ROOT / ".env.example"
-IMAGE = "electron-cash:4.4.6"
+IMAGE = electron_cash_image()
 
 
 def free_port() -> int:
@@ -151,7 +153,7 @@ class TargetServer:
     def __init__(self) -> None:
         self.listener = socket.socket()
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.listener.bind(("127.0.0.1", 0))
+        self.listener.bind(("0.0.0.0", 0))
         self.listener.listen()
         self.port = self.listener.getsockname()[1]
         self.stop_event = Event()
@@ -280,14 +282,16 @@ def run_websockify(
             "--pull=never",
             "--rm",
             "--network",
-            "host",
+            "bridge",
+            "--add-host",
+            "host.docker.internal:host-gateway",
             "--entrypoint",
             "/usr/bin/websockify",
             IMAGE,
             "--heartbeat",
             "1",
             str(port),
-            f"127.0.0.1:{target_port}",
+            f"host.docker.internal:{target_port}",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

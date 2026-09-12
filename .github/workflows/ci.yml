@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run fast validation
+        run: ./scripts/ci.sh fast
+
+  acceptance:
+    name: acceptance
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      CI_REPORT_DIR: ${{ runner.temp }}/electron-cash-docker-v021-reports
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run complete acceptance
+        run: ./scripts/ci.sh acceptance
+      - name: Upload bounded acceptance reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: electron-cash-docker-v021-reports-${{ github.run_id }}
+          path: ${{ runner.temp }}/electron-cash-docker-v021-reports
+          if-no-files-found: ignore
+          retention-days: 5
+
+  gate:
+    name: gate
+    if: always()
+    needs: [fast, acceptance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require applicable validation outcomes
+        env:
+          FAST_RESULT: ${{ needs.fast.result }}
+          ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+        run: |
+          set -eu
+          test "${FAST_RESULT}" = success || { echo "fast=${FAST_RESULT}"; exit 1; }
+          if [ "${EVENT_NAME}" = pull_request ] || [ "${REF_NAME}" = refs/heads/main ] || [ "${EVENT_NAME}" = workflow_dispatch ]; then
+            test "${ACCEPTANCE_RESULT}" = success || { echo "acceptance=${ACCEPTANCE_RESULT}"; exit 1; }
+          fi

@@ -10,7 +10,7 @@ services:
         NOVNC_VERSION: ${NOVNC_VERSION:?NOVNC_VERSION must be set in .env}
         NOVNC_COMMIT: ${NOVNC_COMMIT:?NOVNC_COMMIT must be set in .env}
         NOVNC_ARCHIVE_SHA256: ${NOVNC_ARCHIVE_SHA256:?NOVNC_ARCHIVE_SHA256 must be set in .env}
-    image: electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}
+    image: ${ELECTRON_CASH_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}}
     restart: "on-failure:5"
     stop_grace_period: 15s
     ports:
@@ -41,7 +41,7 @@ services:
       args:
         TOR_VERSION: ${TOR_VERSION:?TOR_VERSION must be set in .env}
         TOR_SOURCE_SHA256: ${TOR_SOURCE_SHA256:?TOR_SOURCE_SHA256 must be set in .env}
-    image: bchforge/electron-cash-docker-tor:${TOR_VERSION:?TOR_VERSION must be set in .env}
+    image: ${TOR_IMAGE:-bchforge/electron-cash-docker-tor:${TOR_VERSION:?TOR_VERSION must be set in .env}}
     restart: on-failure
     stop_grace_period: 10s
     read_only: true
