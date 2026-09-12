@@ -380,13 +380,13 @@ def run_websockify(
             "--entrypoint",
             "/usr/bin/websockify",
             IMAGE,
+            "--verbose",
             "--heartbeat",
             "1",
             str(port),
             target_address,
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
