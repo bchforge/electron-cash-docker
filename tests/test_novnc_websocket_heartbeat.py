@@ -145,7 +145,9 @@ def websocket_connect(port: int) -> socket.socket:
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Key: {key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: binary\r\n"
+        "\r\n"
     ).encode("ascii")
     sock.sendall(request)
     response = read_http_headers(sock)
