@@ -10,10 +10,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from test_support import electron_cash_image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_FILE = ROOT / "plugins.json"
-IMAGE = "electron-cash:4.4.6"
+IMAGE = electron_cash_image()
 PYTHON = "/opt/electroncash-venv/bin/python"
 
 

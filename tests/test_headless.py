@@ -12,11 +12,19 @@ import time
 import uuid
 from pathlib import Path
 
+from test_support import (
+    electron_cash_image,
+    record_cleanup_result,
+    tor_image,
+    unique_project,
+    unique_resource,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
-IMAGE = "electron-cash:4.4.6"
-TOR_IMAGE_PREFIX = "bchforge/electron-cash-docker-tor:"
+IMAGE = electron_cash_image()
+TOR_IMAGE = tor_image()
 CLI = "/opt/electroncash-venv/bin/electron-cash"
 PYTHON = "/opt/electroncash-venv/bin/python"
 
@@ -199,9 +207,9 @@ def wait_for_daemon(
 
 
 def test_headless_runtime_and_port_isolation() -> None:
-    project = f"bchforge-headless-{uuid.uuid4().hex}"
-    volume = f"{project}-wallet"
-    tor_volume = f"{project}-tor"
+    project = unique_project("headless")
+    volume = unique_resource("headless-wallet")
+    tor_volume = unique_resource("headless-tor")
     environment = compose_environment()
 
     with tempfile.TemporaryDirectory(prefix="bchforge-headless-") as temporary:
@@ -224,13 +232,16 @@ def test_headless_runtime_and_port_isolation() -> None:
             for process in ("Xvfb", "openbox-session", "x11vnc", "websockify"):
                 assert process not in top.stdout
         finally:
-            run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120)
+            record_cleanup_result(
+                run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120),
+                [*compose, "down", "-v", "--remove-orphans"],
+            )
 
 
 def test_headless_runtime_with_tor() -> None:
-    project = f"bchforge-headless-tor-{uuid.uuid4().hex}"
-    volume = f"{project}-wallet"
-    tor_volume = f"{project}-tor"
+    project = unique_project("headless-tor")
+    volume = unique_resource("headless-tor-wallet")
+    tor_volume = unique_resource("headless-tor-state")
     environment = compose_environment(use_tor=True)
 
     with tempfile.TemporaryDirectory(prefix="bchforge-headless-tor-") as temporary:
@@ -245,7 +256,7 @@ def test_headless_runtime_with_tor() -> None:
             assert electron_service["environment"]["MODE"] == "headless"
             assert electron_service["environment"]["USE_TOR"] == "true"
             assert "ports" not in electron_service
-            assert tor_service["image"].startswith(TOR_IMAGE_PREFIX)
+            assert tor_service["image"] == TOR_IMAGE
             assert "ports" not in tor_service
             assert "9050" in tor_service["expose"]
 
@@ -256,7 +267,7 @@ def test_headless_runtime_with_tor() -> None:
             wait_for_daemon(compose, environment)
 
             inspected_tor = json.loads(run(["docker", "inspect", tor_container]).stdout)[0]
-            assert inspected_tor["Config"]["Image"].startswith(TOR_IMAGE_PREFIX)
+            assert inspected_tor["Config"]["Image"] == TOR_IMAGE
             assert inspected_tor["NetworkSettings"]["Ports"].get("9050/tcp") is None
 
             config_result = run(
@@ -289,13 +300,16 @@ def test_headless_runtime_with_tor() -> None:
             for process in ("Xvfb", "openbox-session", "x11vnc", "websockify"):
                 assert process not in electron_top.stdout
         finally:
-            run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120)
+            record_cleanup_result(
+                run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120),
+                [*compose, "down", "-v", "--remove-orphans"],
+            )
 
 
 def test_headless_encrypted_cashfusion_transitions_persist() -> None:
-    project = f"bchforge-headless-fusion-{uuid.uuid4().hex}"
-    volume = f"{project}-wallet"
-    tor_volume = f"{project}-tor"
+    project = unique_project("headless-fusion")
+    volume = unique_resource("headless-fusion-wallet")
+    tor_volume = unique_resource("headless-fusion-tor")
     environment = compose_environment()
     environment.update(
         {
@@ -343,7 +357,10 @@ def test_headless_encrypted_cashfusion_transitions_persist() -> None:
                 compose, environment, {"encrypted": True, "autofuse": True}
             )
         finally:
-            run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120)
+            record_cleanup_result(
+                run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120),
+                [*compose, "down", "-v", "--remove-orphans"],
+            )
 
 
 def main() -> None:

@@ -4,36 +4,40 @@
 
 # Electron Cash Docker
 
+[![Release checks | PASSED](docs/badges/release-checks.svg)](docs/ci-security.md)
+[![Tests | ALL PASSED](docs/badges/tests.svg)](docs/ci-security.md)
+[![Bandit 1.9.4 | 0 findings - 2026-09-15](docs/badges/bandit.svg)](docs/ci-security.md#accepted-candidate-results)
+[![Trivy 0.74.0 | 0 fixable HIGH / CRITICAL - 2026-09-15](docs/badges/trivy.svg)](SECURITY.md#automated-validation)
+
 Electron Cash Docker packages [Electron Cash](https://github.com/Electron-Cash/Electron-Cash),
 the Bitcoin Cash SPV wallet, for a local browser through noVNC. It includes
 persistent wallet data, Tor networking, and a default-enabled CashFusion plugin
 with opt-in automatic fusion.
 
-## Current v0.2 Scope
+## Features
 
-Starting from the accepted `v0.1.4` baseline, v0.2 adds:
+Electron Cash Docker currently provides:
 
-- A build-time verified external-plugin supply chain with explicit source,
-  release version, archive SHA-256, and deterministic ZIP SHA-256.
-- The official Flipstarter Helper plugin at v1.5.0, enabled by the trusted
-  manifest and compatible with Electron Cash 4.4.6.
-- An explicit headless Electron Cash daemon mode without the graphical stack.
-- Optional Electron Cash JSON-RPC, disabled by default and exposed only through
-  the explicit localhost-only RPC Compose override with a required password.
+- A self-hosted Electron Cash wallet with browser access through noVNC and
+  persistent wallet/configuration data.
+- A separate, hardened Tor sidecar for Electron Cash SPV and CashFusion traffic
+  explicitly configured for the Docker-internal `tor-proxy:9050` endpoint.
+- CashFusion enabled by default with opt-in automatic fusion.
+- Verified external plugin distribution with pinned source, versions, archive
+  hashes, deterministic package hashes, and the bundled Flipstarter Helper.
+- Both the default GUI/noVNC deployment and an explicit headless daemon mode.
+- Optional password-protected JSON-RPC, disabled by default and exposed only
+  through the localhost-only Compose override.
+- An isolated testnet4 override for disposable, no-funds testing.
 
-The normal GUI/noVNC deployment retains the v0.1.4 behavior and is the final
-inspection mode.
+Electron Cash Docker is developed as an independent open-source project. See
+the project documents below for release history, funded future scope, and
+validation/security details.
 
-`v0.1.4` is the baseline maintenance release within the existing `v0.1` scope.
-It retained Electron Cash 4.4.6, the standalone BCH Forge Tor 0.4.9.11 service,
-and the existing local browser runtime while improving noVNC connection
-reliability. It continues to provide local browser access, persistent Electron
-Cash data, Tor for explicitly configured SPV and CashFusion traffic, the
-default-enabled CashFusion plugin with opt-in auto-fusion, and a test-only
-testnet4 override.
-
-Electron Cash Docker is developed as an independent open-source project.
-Additional features are organized by later release and are not part of `v0.2`.
+The badges above are repository-owned snapshots of the latest accepted release
+validation result. They are updated for an accepted release candidate rather
+than rewritten by every local gate run; the detailed point-in-time security
+scope and known exception are documented in [`docs/ci-security.md`](docs/ci-security.md).
 
 ## Demo
 
@@ -55,7 +59,7 @@ Requirements:
 - Approximately 2 GB of disk space for the image.
 
 ```bash
-git clone https://github.com/bchforge/electron-cash-docker.git
+git clone https://gitlab.com/bchforge/electron-cash-docker.git
 cd electron-cash-docker
 cp .env.example .env
 docker compose build
@@ -84,7 +88,7 @@ validates the plugin metadata, creates a deterministic ZIP, and fails closed on
 either digest mismatch. The runtime verifies the image artifact again before
 copying it to Electron Cash's network-specific `external_plugins` directory.
 
-The only bundled external plugin in v0.2 is Flipstarter Helper v1.5.0 from
+The bundled external plugin is Flipstarter Helper v1.5.0 from
 [`flipstarter/flipstarter-electron-cash`](https://gitlab.com/flipstarter/flipstarter-electron-cash).
 It is a Qt plugin and is not represented as a headless CLI feature. The image
 does not download plugins at runtime and does not implement a plugin registry or
@@ -174,8 +178,8 @@ docker volume rm bchforge-electron-cash-data
 
 Volume deletion is permanent. `docker compose down -v` also removes this
 Compose-managed volume, so it must not be used casually. Keep the recovery seed
-independently; persistence is not a backup. Encrypted manual backup and tested
-restoration remain planned for `v0.3`.
+independently; persistence is not a backup. Maintain separate backups suitable
+for the deployment.
 
 ## Tor And CashFusion
 
@@ -230,6 +234,11 @@ availability of compatible servers.
 
 ## Operation And Development
 
+Release validation is executed through the project-owned `./scripts/ci.sh gate`
+and does not depend on GitHub Actions, GitLab CI, or another hosted provider.
+See [`docs/ci-security.md`](docs/ci-security.md) for validation details, scan
+scope, point-in-time results, and known exceptions.
+
 Use the standard Compose lifecycle commands from the repository root:
 
 ```bash
@@ -252,7 +261,7 @@ stack, confirm the resolved images:
 docker compose --env-file .env config --images
 ```
 
-For v0.2, this should include `electron-cash:4.4.6` and
+For the supplied configuration, this should include `electron-cash:4.4.6` and
 `bchforge/electron-cash-docker-tor:0.4.9.11`.
 
 The Electron Cash and noVNC versions in `.env` have matching commit and archive
@@ -285,33 +294,30 @@ python3 tests/test_headless.py
 python3 tests/test_rpc.py
 ```
 
-The v0.1 persistence, Tor, CashFusion, noVNC, and testnet4 behavior remains the
-regression baseline for the v0.2 additions above.
+These commands cover persistence, Tor, CashFusion, noVNC, testnet4, plugin,
+headless, and JSON-RPC behavior.
 
 Source code and current project documentation are maintained in English.
-English and Spanish setup and security documentation is planned for `v1.0`.
 
 ## Security Warnings
 
 - The noVNC port binds to `127.0.0.1` by default.
-- `v0.1` provides no authentication or project-provided TLS for noVNC. Do not
-  publish the port or change `NOVNC_BIND` to a non-loopback address.
-- A direct public noVNC mapping is outside the supported security model. HTTPS
-  and Basic Auth are planned for `v0.3`.
+- The default deployment provides no authentication or project-provided TLS for
+  noVNC. Do not publish the port or change `NOVNC_BIND` to a non-loopback
+  address.
+- A direct public noVNC mapping is outside the supported security model. This
+  deployment does not provide HTTPS or Basic Auth.
 - Set a wallet password inside Electron Cash before using meaningful funds.
 - Keep the recovery seed offline and never put a real seed in `.env`.
 - A compromised Docker host can read the Docker-managed wallet volume.
-- Persistence is not a backup. A project-managed encrypted backup and tested
-  restoration are planned for `v0.3`.
+- Persistence is not a backup. Maintain independent recovery and backup plans.
 - Tor protects only the configured Electron Cash and CashFusion traffic through
   `tor-proxy:9050`, not the browser, host, wallet volume, or every application
   on the machine.
-- In `v0.1`, the internal passwordless VNC endpoint shares a Docker network with
-  the bundled Tor proxy. Attach no additional containers to that network.
-  Isolating internal GUI services is planned as part of `v1.0` hardening.
-- v0.2 headless mode and optional JSON-RPC are supported release features. RPC
-  remains disabled by default and the password-protected host mapping is
-  localhost-only.
+- The internal passwordless VNC endpoint shares a Docker network with the
+  bundled Tor proxy. Attach no additional containers to that network.
+- Headless mode and optional JSON-RPC are supported features. RPC remains
+  disabled by default and the password-protected host mapping is localhost-only.
 
 ## Testnet4 Testing
 
@@ -365,6 +371,15 @@ testnet4.
   documentation of the built-in noVNC virtual keyboard, English and Spanish
   setup and security documentation, expanded browser, arm64, and integration
   tests, demo, release evidence, and final accountability report.
+
+## Project Documents
+
+- [CHANGELOG.md](CHANGELOG.md) for release history.
+- [CAMPAIGN-PLAN.md](../../CAMPAIGN-PLAN.md) for the funded roadmap and future
+  release scope.
+- [SECURITY.md](SECURITY.md) for the security policy and reporting guidance.
+- [docs/ci-security.md](docs/ci-security.md) for validation details, scan scope,
+  and point-in-time results.
 
 ## License
 
