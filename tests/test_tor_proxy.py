@@ -20,6 +20,14 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from test_support import (
+    electron_cash_image,
+    record_cleanup_result,
+    tor_image,
+    unique_project,
+    unique_resource,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
@@ -38,8 +46,8 @@ def parse_env() -> dict[str, str]:
 ENV_DEFAULTS = parse_env()
 TOR_VERSION = ENV_DEFAULTS["TOR_VERSION"]
 TOR_SOURCE_SHA256 = ENV_DEFAULTS["TOR_SOURCE_SHA256"]
-TOR_IMAGE = f"bchforge/electron-cash-docker-tor:{TOR_VERSION}"
-EC_IMAGE = f"electron-cash:{ENV_DEFAULTS['EC_VERSION']}"
+TOR_IMAGE = tor_image()
+EC_IMAGE = electron_cash_image()
 
 
 def run(command: list[str], *, env=None, timeout=120) -> subprocess.CompletedProcess[str]:
@@ -210,6 +218,7 @@ def test_static_provenance() -> None:
     torrc = (TOR_DIR / "torrc").read_text(encoding="utf-8")
     keys = (TOR_DIR / "tor-release-keys.asc").read_text(encoding="utf-8")
     assert "https://dist.torproject.org/" in dockerfile
+    assert "# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32" in dockerfile
     assert "gpgv" in dockerfile
     assert "sha256sum" in dockerfile
     assert "([.][0-9]+){3}" in dockerfile
@@ -319,9 +328,9 @@ def test_runtime() -> None:
     ec_image = run(["docker", "image", "inspect", EC_IMAGE])
     assert ec_image.returncode == 0, "build the Electron Cash image before running this suite"
 
-    project = f"bchforge-tor-{uuid.uuid4().hex}"
-    wallet_volume = f"bchforge-test-wallet-{uuid.uuid4().hex}"
-    tor_volume = f"bchforge-test-tor-state-{uuid.uuid4().hex}"
+    project = unique_project("tor")
+    wallet_volume = unique_resource("tor-wallet")
+    tor_volume = unique_resource("tor-state")
     port = free_port()
     environment = compose_environment(port)
     canonical_before = run(["docker", "volume", "inspect", "bchforge-electron-cash-data"])
@@ -394,25 +403,32 @@ def test_runtime() -> None:
             local_health = run(["docker", "exec", tor_container, "/usr/local/bin/tor-healthcheck"])
             assert local_health.returncode == 0, local_health.stdout + local_health.stderr
 
-            routed = compose_exec(
-                command,
-                environment,
-                "electron-cash",
-                [
-                    "curl",
-                    "--fail",
-                    "--silent",
-                    "--show-error",
-                    "--socks5-hostname",
-                    "tor-proxy:9050",
-                    "--connect-timeout",
-                    "30",
-                    "--max-time",
-                    "90",
-                    "https://check.torproject.org/api/ip",
-                ],
-                timeout=120,
-            )
+            routed = None
+            for attempt in range(3):
+                routed = compose_exec(
+                    command,
+                    environment,
+                    "electron-cash",
+                    [
+                        "curl",
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--socks5-hostname",
+                        "tor-proxy:9050",
+                        "--connect-timeout",
+                        "30",
+                        "--max-time",
+                        "90",
+                        "https://check.torproject.org/api/ip",
+                    ],
+                    timeout=120,
+                )
+                if routed.returncode == 0:
+                    break
+                if attempt < 2:
+                    time.sleep(5)
+            assert routed is not None
             assert routed.returncode == 0, routed.stdout + routed.stderr
             assert json.loads(routed.stdout)["IsTor"] is True
 
@@ -511,9 +527,14 @@ def test_runtime() -> None:
             assert_sentinel()
             wait_novnc(port)
         finally:
-            run([*command, "down", "--remove-orphans"], env=environment, timeout=120)
+            down_command = [*command, "down", "--remove-orphans"]
+            record_cleanup_result(
+                run(down_command, env=environment, timeout=120),
+                down_command,
+            )
             for volume in (wallet_volume, tor_volume):
-                run(["docker", "volume", "rm", volume], timeout=30)
+                volume_command = ["docker", "volume", "rm", volume]
+                record_cleanup_result(run(volume_command, timeout=30), volume_command)
 
     canonical_after = run(["docker", "volume", "inspect", "bchforge-electron-cash-data"])
     assert (canonical_before.returncode, canonical_before.stdout, canonical_before.stderr) == (

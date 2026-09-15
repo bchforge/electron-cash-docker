@@ -11,12 +11,14 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from test_support import electron_cash_image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_FILE = ROOT / "plugins.json"
 BUILDER = ROOT / "docker/plugins/build_plugins.sh"
 DOCKERFILE = ROOT / "docker/Dockerfile"
-IMAGE = "electron-cash:4.4.6"
+IMAGE = electron_cash_image()
 
 
 def run(command: list[str], *, env=None, timeout=120) -> subprocess.CompletedProcess[str]:

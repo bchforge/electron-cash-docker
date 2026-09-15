@@ -38,6 +38,11 @@ RUN git clone https://github.com/Electron-Cash/Electron-Cash.git . && \
     git submodule update --init --recursive && \
     ./contrib/make_secp
 
+COPY docker/electron-cash-cve-2024-23342.patch /tmp/electron-cash-cve-2024-23342.patch
+
+RUN git apply --check /tmp/electron-cash-cve-2024-23342.patch && \
+    git apply --whitespace=error /tmp/electron-cash-cve-2024-23342.patch
+
 RUN curl -fsSL -o /tmp/electron-cash.tar.gz \
         "https://github.com/Electron-Cash/Electron-Cash/releases/download/${EC_VERSION}/electron_cash-${EC_VERSION}.tar.gz" && \
     echo "${EC_ARCHIVE_SHA256}  /tmp/electron-cash.tar.gz" | sha256sum -c - && \
@@ -47,19 +52,11 @@ RUN curl -fsSL -o /tmp/electron-cash.tar.gz \
 
 RUN python3 -m venv --system-site-packages /opt/electroncash-venv
 
+COPY requirements.txt /tmp/requirements.txt
+
 RUN /opt/electroncash-venv/bin/pip install --no-cache-dir \
-    pyaes==1.6.1 \
-    ecdsa==0.19.1 \
-    requests==2.32.3 \
-    qrcode==7.4.2 \
-    protobuf==5.28.2 \
-    jsonrpclib-pelix==0.4.0 \
-    PySocks==1.7.1 \
-    python-dateutil==2.9.0 \
-    stem==1.8.2 \
-    certifi==2024.7.4 \
-    pathvalidate==3.2.0 \
-    qdarkstyle==3.2.3
+    --requirement /tmp/requirements.txt && \
+    /opt/electroncash-venv/bin/pip check
 
 RUN /opt/electroncash-venv/bin/python setup.py install \
     --single-version-externally-managed --root=/

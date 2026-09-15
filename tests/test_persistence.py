@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from urllib.request import urlopen
 
+from test_support import electron_cash_image, record_cleanup_result, unique_project, unique_resource
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
@@ -17,7 +19,7 @@ for env_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
     if "=" in env_line and not env_line.startswith("#"):
         key, value = env_line.split("=", 1)
         ENV_DEFAULTS[key] = value
-IMAGE = f"electron-cash:{ENV_DEFAULTS['EC_VERSION']}"
+IMAGE = electron_cash_image()
 PASSWORD = "cashfusion-test-password"
 
 
@@ -34,7 +36,7 @@ def run(command, *, env=None, timeout=120):
 
 
 def unique_name(prefix):
-    return f"bchforge-test-{prefix}-{uuid.uuid4().hex}"
+    return unique_resource(prefix)
 
 
 def free_port():
@@ -49,7 +51,8 @@ def create_volume(name):
 
 
 def remove_volume(name):
-    run(["docker", "volume", "rm", name])
+    command = ["docker", "volume", "rm", name]
+    record_cleanup_result(run(command), command)
 
 
 def volume_shell(volume, command, *, extra_mounts=()):
@@ -237,9 +240,9 @@ def assert_sentinel(volume, relative_path, value):
 
 
 def test_compose_managed_persistence():
-    project = unique_name("compose")
-    volume = unique_name("volume")
-    tor_volume = unique_name("tor-state")
+    project = unique_project("compose")
+    volume = unique_resource("volume")
+    tor_volume = unique_resource("tor-state")
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="bchforge-compose-") as temp_dir:
         override = write_volume_override(temp_dir, volume, tor_volume)
@@ -279,15 +282,16 @@ def test_compose_managed_persistence():
             wait_for_running(args, env=env)
             assert_sentinel(volume, ".v011-persistence", "mainnet")
         finally:
-            run([*args, "down", "--remove-orphans"], env=env, timeout=120)
+            command = [*args, "down", "--remove-orphans"]
+            record_cleanup_result(run(command, env=env, timeout=120), command)
             remove_volume(volume)
             remove_volume(tor_volume)
 
 
 def test_testnet4_uses_internal_subdirectory():
-    project = unique_name("testnet4")
-    volume = unique_name("volume")
-    tor_volume = unique_name("tor-state")
+    project = unique_project("testnet4")
+    volume = unique_resource("testnet4-volume")
+    tor_volume = unique_resource("testnet4-tor-state")
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="bchforge-testnet4-") as temp_dir:
         override = write_volume_override(temp_dir, volume, tor_volume)
@@ -312,7 +316,8 @@ def test_testnet4_uses_internal_subdirectory():
             assert_sentinel(volume, "testnet4/.v011-testnet4", "testnet4")
             assert_sentinel(volume, ".v011-mainnet", "mainnet")
         finally:
-            run([*testnet_args, "down", "--remove-orphans"], env=testnet_env, timeout=120)
+            command = [*testnet_args, "down", "--remove-orphans"]
+            record_cleanup_result(run(command, env=testnet_env, timeout=120), command)
             remove_volume(volume)
             remove_volume(tor_volume)
 

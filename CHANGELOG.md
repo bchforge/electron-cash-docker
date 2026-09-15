@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.2.1
+
+- Added canonical fast and complete CI validation with isolated candidate-image
+  builds, Compose resource guards, dependency checks, and bounded Trivy scans.
+- Moved the directly pinned runtime Python dependencies into `requirements.txt`
+  consumed by the real Docker build without changing their versions or package
+  set.
+- Added provider-independent local Python SAST, base-vs-candidate dependency
+  review, read-only dependency-update discovery, and local vulnerability
+  reporting policy.
+- Added repository-owned validation badges and an optional GitLab external
+  commit-status adapter. GitLab merge enforcement displays the local result but
+  does not define release correctness.
+- Added a provider-independent local release gate with durable evidence,
+  source vulnerability and secret scans, machine-enforced vulnerability
+  dispositions, and fatal owned-resource cleanup checks. Hosted CI remains a
+  supplemental wrapper rather than a release requirement.
+- Pinned the Tor Dockerfile frontend by digest and retained the reviewed
+  no-fix `ecdsa`/`CVE-2024-23342` finding as a narrow machine-checked
+  exception.
+- Added a bounded CVE-2024-23342 integration mitigation that requires the
+  verified BCH-specific native ECC backend and fails closed instead of using
+  the pure-Python private-operation fallbacks. The package advisory remains
+  visible and is not represented as an upstream fix.
+- Updated only the directly pinned protobuf package from `5.28.2` to `5.29.6`
+  after the candidate scan identified fixable high-severity vulnerabilities;
+  the remaining direct runtime pins are unchanged.
+- Preserved the existing Electron Cash, noVNC, Tor, plugin, GUI, headless, RPC,
+  persistence, CashFusion, and testnet4 contracts. This is a maintenance
+  baseline, not a new funded product milestone, and it is not a deployment.
+
 ## v0.2
 
 - Added the trusted external-plugin manifest and deterministic build-time source

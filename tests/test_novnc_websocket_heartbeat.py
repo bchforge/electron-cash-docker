@@ -11,9 +11,10 @@ import shlex
 import socket
 import subprocess
 import time
-import uuid
 from pathlib import Path
 from threading import Event, Thread
+
+from test_support import electron_cash_image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
 KEEPALIVE = ROOT / "docker" / "novnc-keepalive.js"
 ENV_FILE = ROOT / ".env.example"
-IMAGE = "electron-cash:4.4.6"
+IMAGE = electron_cash_image()
 
 
 def free_port() -> int:
@@ -302,6 +303,11 @@ def run_websockify(
                 raise AssertionError("websockify exited before becoming ready")
             time.sleep(0.1)
     process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
     raise AssertionError("websockify did not become ready")
 
 

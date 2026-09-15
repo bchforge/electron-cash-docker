@@ -1,0 +1,8 @@
+# Provider-independent local Python SAST toolchain. Keep versions explicit.
+bandit==1.9.4
+PyYAML==6.0.3
+stevedore==5.9.1
+rich==15.0.0
+markdown-it-py==4.2.0
+pygments==2.21.0
+mdurl==0.1.2
