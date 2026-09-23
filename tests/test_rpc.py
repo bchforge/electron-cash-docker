@@ -88,7 +88,6 @@ def compose_environment(*, enabled: bool, host_port: int | None = None) -> dict[
         {
             "USE_TOR": "false",
             "CASHFUSION_ENABLED": "true",
-            "CASHFUSION_AUTO_FUSE": "false",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
             "JSONRPC_ENABLED": str(enabled).lower(),
@@ -214,8 +213,6 @@ def test_rpc_missing_or_empty_credentials_fail_closed() -> None:
                 "USE_TOR=false",
                 "-e",
                 "CASHFUSION_ENABLED=true",
-                "-e",
-                "CASHFUSION_AUTO_FUSE=false",
                 "-e",
                 "JSONRPC_ENABLED=true",
                 "-e",

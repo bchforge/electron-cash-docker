@@ -3,11 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=3000">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <title>Electron Cash Docker</title>
+  <style>
+    :root { --bg: #0f1419; --card: #1a1f2e; --border: #2a3142; --text: #e8e8e8; --muted: #8b95a7; --accent: #4ade80; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { min-height: 100%; margin: 0; padding: 1rem; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+    main { width: min(100%, 380px); padding: 2.5rem; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 8px 32px #0006; }
+    .logo { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 1.25rem; border-radius: 12px; background: var(--accent); }
+    .logo svg { width: 32px; }
+    h1 { margin: 0 0 .25rem; font-size: 1.5rem; }
+    p { margin: 0 0 1.75rem; color: var(--muted); font-size: .875rem; }
+    label { display: block; margin: .9rem 0 .45rem; color: var(--muted); font-size: .75rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+    input[type=text], input[type=password] { width: 100%; padding: .75rem .875rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .remember { display: flex; align-items: center; gap: .5rem; margin: 1rem 0; color: var(--muted); font-size: .8125rem; }
+    .remember input { accent-color: var(--accent); }
+    .remember label { margin: 0; color: var(--muted); font-size: inherit; letter-spacing: normal; text-transform: none; }
+    button { width: 100%; margin-top: .5rem; padding: .875rem; border: 0; border-radius: 6px; background: var(--accent); color: var(--bg); font: 600 1rem inherit; cursor: pointer; }
+     button:hover { background: #22c55e; }
+    footer { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .75rem; text-align: center; }
+  </style>
 </head>
 <body>
-  <p>Opening Electron Cash. If the connection does not start, open
-    <a href="/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=3000">the noVNC client</a>.</p>
+  <main>
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#0f1419" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg></div>
+     <h1>Electron Cash Docker</h1>
+    <p>Bitcoin Cash wallet &middot; Tor-routed SPV</p>
+    <form method="post" action="/auth/login">
+       <label for="pass">Password</label>
+      <input id="pass" name="password" type="password" autocomplete="current-password" required>
+      <div class="remember"><input id="remember" name="remember" type="checkbox"><label for="remember">Remember this session</label></div>
+      <button type="submit">Connect</button>
+    </form>
+    <footer>noVNC connects after authentication. The password is never stored in this browser.</footer>
+  </main>
 </body>
 </html>

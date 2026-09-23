@@ -77,6 +77,12 @@ def test_generated_novnc_html_has_clean_keepalive_injection() -> None:
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
 
     html = result.stdout
+    assert html.count(b"<title>Electron Cash Docker</title>") == 1
+    assert b"<title>noVNC</title>" not in html
+    favicon_link = b'<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
+    assert html.count(favicon_link) == 1
+    assert b'<script type="module" crossorigin="anonymous" src="app/error-handler.js"></script>' in html
+    assert b'import UI from "./app/ui.js";' in html
     marker = b'<script src="/novnc-keepalive.js"></script>'
     assert html.count(marker) == 1
     assert html.count(b"</head>") == 1

@@ -12,11 +12,33 @@ APP_PATH = "/opt/electroncash-venv/bin/electron-cash"
 SHUTDOWN_MARKER = Path("/tmp/electron-cash-shutdown")
 _shutdown_requested = False
 _shutdown_started = False
+_shutdown_marker_error_reported = False
 
 
 def request_shutdown(_signum, _frame):
     global _shutdown_requested
     _shutdown_requested = True
+
+
+def consume_shutdown_marker():
+    """Consume the one-shot shutdown event before closing the GUI."""
+    global _shutdown_marker_error_reported
+
+    try:
+        SHUTDOWN_MARKER.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        if not _shutdown_marker_error_reported:
+            print(
+                f"[!] unable to consume shutdown marker {SHUTDOWN_MARKER}: {error}",
+                file=sys.stderr,
+            )
+            _shutdown_marker_error_reported = True
+        return False
+
+    _shutdown_marker_error_reported = False
+    return True
 
 
 def install_shutdown_timer():
@@ -38,7 +60,10 @@ def install_shutdown_timer():
                     window.showMaximized()
                 windows_maximized = True
 
-            if (_shutdown_requested or SHUTDOWN_MARKER.exists()) and not _shutdown_started:
+            marker_present = SHUTDOWN_MARKER.exists()
+            if (_shutdown_requested or marker_present) and not _shutdown_started:
+                if marker_present and not consume_shutdown_marker():
+                    return
                 _shutdown_started = True
                 gui.close()
                 gui.app.quit()
@@ -51,14 +76,14 @@ def install_shutdown_timer():
     ElectrumGui.main = main
 
 
-def apply_cashfusion_autofuse(wallet, enabled, auto_fuse):
-    from cashfusion_autofuse import apply_cashfusion_autofuse as apply
+def apply_cashfusion_defaults(wallet):
+    from cashfusion_defaults import apply_cashfusion_defaults as apply
 
-    return apply(wallet, enabled, auto_fuse)
+    return apply(wallet)
 
 
-def patch_cashfusion_plugin_class(plugin_class, enabled, auto_fuse, test_password=""):
-    if getattr(plugin_class, "_docker_autofuse_patched", False):
+def patch_cashfusion_plugin_class(plugin_class, test_password=""):
+    if getattr(plugin_class, "_docker_defaults_patched", False):
         return
 
     original_add_wallet = plugin_class.add_wallet
@@ -67,12 +92,11 @@ def patch_cashfusion_plugin_class(plugin_class, enabled, auto_fuse, test_passwor
     @wraps(original_add_wallet)
     def add_wallet(plugin, wallet, password=None):
         try:
-            # Upstream add_wallet() starts auto-fusing from the persisted flag.
-            # Apply the deployment default immediately before that decision,
-            # while leaving later GUI opt-in available.
-            apply_cashfusion_autofuse(wallet, enabled, auto_fuse)
+            if plugin.wallet_can_fuse(wallet):
+                apply_cashfusion_defaults(wallet)
         except Exception as error:
-            wallet.print_error(f"[fusion] failed to apply environment autofuse: {error}")
+            wallet.print_error(f"[fusion] failed to apply wallet defaults: {error}")
+            raise RuntimeError("CashFusion deployment policy failed closed") from error
         return original_add_wallet(plugin, wallet, password)
 
     @wraps(original_on_new_window)
@@ -83,19 +107,21 @@ def patch_cashfusion_plugin_class(plugin_class, enabled, auto_fuse, test_passwor
                 if test_password and wallet.has_password():
                     wallet.check_password(test_password)
                     window.gui_object.cache_password(wallet, test_password)
-                apply_cashfusion_autofuse(wallet, enabled, auto_fuse)
+                apply_cashfusion_defaults(wallet)
             except Exception as error:
-                wallet.print_error(f"[fusion] failed to apply environment autofuse: {error}")
+                wallet.print_error(f"[fusion] failed to apply wallet defaults: {error}")
+                raise RuntimeError("CashFusion deployment policy failed closed") from error
         return original_on_new_window(plugin, window)
 
     plugin_class.add_wallet = add_wallet
     plugin_class.on_new_window = on_new_window
-    plugin_class._docker_autofuse_patched = True
+    plugin_class._docker_defaults_patched = True
 
 
-def install_cashfusion_autofuse():
-    enabled = os.environ.get("CASHFUSION_ENABLED", "false") == "true"
-    auto_fuse = os.environ.get("CASHFUSION_AUTO_FUSE", "false") == "true"
+def install_cashfusion_defaults():
+    from cashfusion_defaults import cashfusion_config_from_environment
+
+    enabled = cashfusion_config_from_environment()["enabled"]
     test_password = os.environ.get("TEST_WALLET_PASSWORD", "")
 
     if not enabled:
@@ -107,7 +133,7 @@ def install_cashfusion_autofuse():
 
     def init(plugin, parent, config, name):
         if name == "fusion" and type(plugin).__module__ == "electroncash_plugins.fusion.qt":
-            patch_cashfusion_plugin_class(type(plugin), enabled, auto_fuse, test_password)
+            patch_cashfusion_plugin_class(type(plugin), test_password)
         original_init(plugin, parent, config, name)
 
     BasePlugin.__init__ = init
@@ -138,7 +164,7 @@ def main():
     signal.signal(signal.SIGINT, request_shutdown)
     install_shutdown_timer()
     install_test_wallet_password()
-    install_cashfusion_autofuse()
+    install_cashfusion_defaults()
     sys.argv[0] = APP_PATH
     runpy.run_path(APP_PATH, run_name="__main__")
 

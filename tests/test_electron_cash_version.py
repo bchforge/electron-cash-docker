@@ -26,6 +26,7 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     # The checked-in env file, not a caller's shell override, is under test.
     for key in ("EC_VERSION", "EC_COMMIT", "EC_ARCHIVE_SHA256"):
         environment.pop(key, None)
+    environment["BASIC_AUTH_PASSWORD"] = "synthetic-auth-secret"
     return subprocess.run(
         command,
         cwd=ROOT,

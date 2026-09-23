@@ -1,4 +1,10 @@
 services:
+  auth-session:
+    profiles: [headless]
+  caddy:
+    profiles: [headless]
+  fail2ban:
+    profiles: [headless]
   electron-cash:
     environment:
       MODE: headless

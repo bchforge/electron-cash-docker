@@ -7,7 +7,18 @@ export DISPLAY=:99
 export XDG_RUNTIME_DIR=/tmp/runtime-electroncash
 
 MODE=${MODE:-novnc}
+ECD_VERSION_FILE=/etc/electroncash-docker/VERSION
+if [[ ! -r "${ECD_VERSION_FILE}" ]]; then
+    echo "[!] missing product version file: ${ECD_VERSION_FILE}"
+    exit 1
+fi
+ECD_PRODUCT_VERSION=$(tr -d '\r\n' < "${ECD_VERSION_FILE}")
+if [[ ! "${ECD_PRODUCT_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    echo "[!] invalid product version: ${ECD_PRODUCT_VERSION}"
+    exit 1
+fi
 USE_TOR=${USE_TOR:?USE_TOR must be set}
+CASHFUSION_ENABLED=${CASHFUSION_ENABLED:-true}
 TESTNET4=${TESTNET4:-false}
 WALLET_AUTO_CREATE=${WALLET_AUTO_CREATE:-false}
 TEST_WALLET_PASSWORD=${TEST_WALLET_PASSWORD:-}
@@ -25,6 +36,11 @@ esac
 case "${USE_TOR}" in
     true|false) ;;
     *) echo "[!] USE_TOR must be true or false"; exit 1 ;;
+esac
+CASHFUSION_ENABLED="${CASHFUSION_ENABLED,,}"
+case "${CASHFUSION_ENABLED}" in
+    true|false) ;;
+    *) echo "[!] CASHFUSION_ENABLED must be true or false"; exit 1 ;;
 esac
 case "${WALLET_AUTO_CREATE}" in
     true|false) ;;
@@ -66,6 +82,22 @@ case "${JSONRPC_PORT}" in
 esac
 if [ "${JSONRPC_PORT}" -lt 1 ] || [ "${JSONRPC_PORT}" -gt 65535 ]; then
     echo "[!] JSONRPC_PORT must be between 1 and 65535"
+    exit 1
+fi
+
+if ! PYTHONPATH=/home/electroncash python3 - <<'PY'
+from cashfusion_defaults import (
+    CashFusionConfigurationError,
+    cashfusion_config_from_environment,
+)
+
+try:
+    cashfusion_config_from_environment()
+except CashFusionConfigurationError as error:
+    print(f"[!] {error}")
+    raise SystemExit(1)
+PY
+then
     exit 1
 fi
 
@@ -624,7 +656,7 @@ start_headless() {
         command+=(--wallet "${WALLET_FILE}")
     fi
     command+=(daemon --verbose)
-    "${command[@]}" &
+    env CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" "${command[@]}" &
     ELECTRONCASH_PID=$!
 
     local cli=(/opt/electroncash-venv/bin/electron-cash)
@@ -670,7 +702,7 @@ PY
 }
 
 start_novnc() {
-    echo "[*] Starting v0.1 noVNC wallet"
+    echo "[*] Starting ${ECD_PRODUCT_VERSION} noVNC wallet"
 
     Xvfb :99 -screen 0 1600x900x24 -nolisten tcp &
     XVFB_PID=$!
@@ -699,17 +731,16 @@ start_novnc() {
         command+=("${EC_NET_FLAG}")
     fi
     command+=(--verbose)
-    env DISPLAY=:99 "${command[@]}" &
+    env CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" DISPLAY=:99 "${command[@]}" &
     ELECTRONCASH_PID=$!
 }
 
 echo "=========================================="
-echo "  Electron Cash Docker v0.2"
+echo "  Electron Cash Docker v${ECD_PRODUCT_VERSION}"
 echo "  Mode:    ${MODE}"
 echo "  Network: ${NETWORK_LABEL}"
 echo "  Tor:     ${USE_TOR}"
 echo "  Fusion:  ${CASHFUSION_ENABLED}"
-echo "  AutoFuse:${CASHFUSION_AUTO_FUSE:-false}"
 if [ "${JSONRPC_ENABLED}" = "true" ]; then
     echo "  RPC:     enabled on port ${JSONRPC_PORT}"
 else

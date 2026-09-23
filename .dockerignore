@@ -1,16 +1,13 @@
-# The image only copies files from docker/. Keep wallets, environment files, and
-# repository metadata out of every build context.
+# Keep wallets, environment files, repository metadata, and unrelated project
+# files out of the root build context while retaining the Docker assets needed
+# by the images.
 **
 !docker/
-!docker/Dockerfile
-!docker/novnc-index.html
-!docker/novnc-keepalive.js
-!docker/entrypoint.sh
-!docker/cashfusion.sh
-!docker/cashfusion_autofuse.py
-!docker/electroncash-wrapper.py
-!docker/electroncash-daemon-wrapper.py
-!docker/plugins/
-!docker/plugins/build_plugins.sh
 !plugins.json
 !requirements.txt
+!VERSION
+
+# Do not send generated files or nested environment files in the Docker tree.
+docker/**/__pycache__/
+docker/**/*.pyc
+docker/**/.env

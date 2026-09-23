@@ -7,7 +7,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from test_support import electron_cash_image, record_cleanup_result, unique_project, unique_resource
 
@@ -21,6 +21,7 @@ for env_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         ENV_DEFAULTS[key] = value
 IMAGE = electron_cash_image()
 PASSWORD = "cashfusion-test-password"
+GATEWAY_PASSWORD = "synthetic-auth-secret"
 
 
 def run(command, *, env=None, timeout=120):
@@ -55,6 +56,11 @@ def remove_volume(name):
     record_cleanup_result(run(command), command)
 
 
+def remove_gateway_volumes(project):
+    for suffix in ("caddy-data", "caddy-config", "caddy-log", "fail2ban-state", "caddy-ban-state", "caddy-control"):
+        remove_volume(f"{project}_{suffix}")
+
+
 def volume_shell(volume, command, *, extra_mounts=()):
     args = [
         "docker",
@@ -82,9 +88,7 @@ def bootstrap_failure(volume):
             "-e",
             "USE_TOR=false",
             "-e",
-            "CASHFUSION_ENABLED=true",
-            "-e",
-            "CASHFUSION_AUTO_FUSE=false",
+            "CASHFUSION_ENABLED=false",
             "--mount",
             f"type=volume,src={volume},dst=/home/electroncash/.electron-cash",
             IMAGE,
@@ -115,11 +119,14 @@ def compose_env(port, *, testnet=False):
     env = os.environ.copy()
     env.update(
         {
-            "NOVNC_BIND": "127.0.0.1",
-            "NOVNC_HOST_PORT": str(port),
+            "CADDY_SITE_ADDRESS": "http://localhost",
+            "CADDY_TLS_MODE": "auto",
+            "CADDY_EDGE_BIND": "127.0.0.1",
+            "CADDY_HTTP_HOST_PORT": str(port),
+            "CADDY_HTTPS_HOST_PORT": str(free_port()),
+            "BASIC_AUTH_PASSWORD": GATEWAY_PASSWORD,
             "USE_TOR": "false",
             "CASHFUSION_ENABLED": "true",
-            "CASHFUSION_AUTO_FUSE": "false",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
         }
@@ -129,7 +136,6 @@ def compose_env(port, *, testnet=False):
             {
                 "WALLET_AUTO_CREATE": "true",
                 "TEST_WALLET_PASSWORD": PASSWORD,
-                "CASHFUSION_AUTO_FUSE": "true",
             }
         )
     return env
@@ -186,7 +192,10 @@ def assert_novnc(port):
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
-            with urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
+            request = Request(
+                f"http://127.0.0.1:{port}/",
+            )
+            with urlopen(request, timeout=2) as response:
                 assert response.status == 200
                 return
         except Exception:
@@ -286,6 +295,7 @@ def test_compose_managed_persistence():
             record_cleanup_result(run(command, env=env, timeout=120), command)
             remove_volume(volume)
             remove_volume(tor_volume)
+            remove_gateway_volumes(project)
 
 
 def test_testnet4_uses_internal_subdirectory():
@@ -320,6 +330,7 @@ def test_testnet4_uses_internal_subdirectory():
             record_cleanup_result(run(command, env=testnet_env, timeout=120), command)
             remove_volume(volume)
             remove_volume(tor_volume)
+            remove_gateway_volumes(project)
 
 
 def test_unmarked_nonempty_volume_rejected():

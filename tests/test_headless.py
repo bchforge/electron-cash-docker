@@ -132,7 +132,6 @@ def compose_environment(*, use_tor: bool = False) -> dict[str, str]:
         {
             "USE_TOR": str(use_tor).lower(),
             "CASHFUSION_ENABLED": "true",
-            "CASHFUSION_AUTO_FUSE": "false",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
             "JSONRPC_ENABLED": "false",
@@ -306,16 +305,16 @@ def test_headless_runtime_with_tor() -> None:
             )
 
 
-def test_headless_encrypted_cashfusion_transitions_persist() -> None:
+def test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority() -> None:
     project = unique_project("headless-fusion")
     volume = unique_resource("headless-fusion-wallet")
     tor_volume = unique_resource("headless-fusion-tor")
     environment = compose_environment()
     environment.update(
         {
-            "CASHFUSION_AUTO_FUSE": "true",
             "WALLET_AUTO_CREATE": "true",
             "TEST_WALLET_PASSWORD": "cashfusion-test-password",
+            "CASHFUSION_AUTO_FUSE": "true",
         }
     )
 
@@ -331,7 +330,7 @@ def test_headless_encrypted_cashfusion_transitions_persist() -> None:
                 compose, environment, {"encrypted": True, "autofuse": True}
             )
 
-            environment["CASHFUSION_AUTO_FUSE"] = "false"
+            environment["CASHFUSION_ENABLED"] = "false"
             restarted = run(
                 [*compose, "up", "-d", "--force-recreate", "--no-build"],
                 env=environment,
@@ -341,10 +340,10 @@ def test_headless_encrypted_cashfusion_transitions_persist() -> None:
             wait_for_running(compose, environment)
             wait_for_daemon(compose, environment, testnet4=True)
             observed = wait_for_wallet_autofuse(
-                compose, environment, {"encrypted": True, "autofuse": False}
+                compose, environment, {"encrypted": True, "autofuse": True}
             )
 
-            environment["CASHFUSION_AUTO_FUSE"] = "true"
+            environment["CASHFUSION_ENABLED"] = "true"
             restarted = run(
                 [*compose, "up", "-d", "--force-recreate", "--no-build"],
                 env=environment,
@@ -366,7 +365,7 @@ def test_headless_encrypted_cashfusion_transitions_persist() -> None:
 def main() -> None:
     test_headless_runtime_and_port_isolation()
     test_headless_runtime_with_tor()
-    test_headless_encrypted_cashfusion_transitions_persist()
+    test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority()
     print("PASS headless mode, daemon readiness, port isolation, and CashFusion persistence")
 
 
