@@ -102,6 +102,19 @@ def parse_requirements(
 def parse_dockerfile(text: str, source: str, records: list[dict[str, Any]]) -> None:
     stage_index = 0
     for index, line in enumerate(text.splitlines(), 1):
+        argument = re.match(r"\s*ARG\s+([A-Z0-9_]+)=(\S+)", line)
+        if argument:
+            key, value = argument.groups()
+            record(
+                records,
+                f"docker-arg:{source}:{key}",
+                value,
+                f"{source}:{index}",
+                bool(re.fullmatch(r"[0-9a-fA-F]{64}", value))
+                if re.search(r"(?:SHA|HASH|DIGEST|CHECKSUM)", key, re.IGNORECASE)
+                else False,
+                "docker-arg",
+            )
         syntax = re.match(r"\s*#\s*syntax=(\S+)", line)
         if syntax:
             value = syntax.group(1)
@@ -193,7 +206,12 @@ def inventory(ref: str | None) -> tuple[list[dict[str, Any]], list[str]]:
     sast_requirements = source_text(ref, "requirements-sast.txt")
     if sast_requirements is not None:
         parse_requirements(sast_requirements, "requirements-sast.txt", records, errors, "sast-tool")
-    for path in ("docker/Dockerfile", "docker/tor/Dockerfile"):
+    for path in (
+        "docker/Dockerfile",
+        "docker/tor/Dockerfile",
+        "docker/caddy/Dockerfile",
+        "docker/fail2ban/Dockerfile",
+    ):
         text = source_text(ref, path)
         if text is not None:
             parse_dockerfile(text, path, records)
@@ -253,6 +271,13 @@ def run_dependency_review(base_ref: str, report_dir: Path, manifest: dict[str, A
     candidate, candidate_errors = inventory(None)
     changes = compare(base, candidate)
     failures = [*base_errors, *candidate_errors]
+    for item in candidate:
+        if (
+            (item["kind"] == "container" and ":" in item["value"])
+            or item["kind"] == "dockerfile"
+            or HASH_KEY.search(item["key"])
+        ) and not item["immutable"]:
+            failures.append(f"integrity metadata is not immutable for {item['key']}")
     for change in changes["changed"]:
         before = change["before"]
         after = change["after"]
@@ -299,7 +324,7 @@ def run_dependency_review(base_ref: str, report_dir: Path, manifest: dict[str, A
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("base_ref", nargs="?", default="v0.2")
+    parser.add_argument("base_ref", nargs="?", default="v0.2.1")
     parser.add_argument("--report-dir", type=Path)
     args = parser.parse_args()
     try:

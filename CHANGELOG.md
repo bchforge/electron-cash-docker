@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3
+
+- Added a unified Caddy gateway protecting the noVNC HTML/assets and
+WebSocket/RFB endpoint with a password-only login form and session-based
+authentication. Local deployments provide independent HTTP on port 80 and
+HTTPS on port 443, while public-domain deployments redirect HTTP to automatic
+ HTTPS. Caddy source and base-image identity are pinned and verified.
+- Simplified first run to `.env` plus standard `docker compose build` and
+`docker compose up -d`. Authentication credentials are handled internally at
+runtime, so no host-side password hash file or startup wrapper is required.
+- Added a task-owned fail2ban sidecar integrated with the Caddy edge, with
+client-isolation and enforcement tests covering supported direct-client and
+proxied access paths.
+- Added a default-enabled, manual-first CashFusion initial wallet profile with
+ environment-driven defaults, validation, missing-only persistence, and
+ GUI-authoritative settings across restarts. Automatic fusion remains opt-in.
+ The default selector is `count` with a target of `10`, queued autofuse is `4`,
+  fuse depth is `3`, and Docker-internal Tor remains fixed at `tor-proxy:9050`.
+- Added the two-command encrypted backup/restore workflow (`backup <name>` and
+`restore <name>`) for Linux, macOS, and Windows hosts with Docker. It resolves
+the active Compose wallet volume, quiesces only Electron Cash when required,
+validates the GPG/manifest backup format, snapshots the current volume before
+replacement, preserves the source backup, and automatically rolls back failed
+restore, start, or health-check operations.
+- Extended the release gate with remote-access, authentication,
+CashFusion-policy, backup/restore, Compose-isolation, regression, and
+image-security validation for the v0.3 release.
+
 ## v0.2.1
 
 - Added canonical fast and complete CI validation with isolated candidate-image

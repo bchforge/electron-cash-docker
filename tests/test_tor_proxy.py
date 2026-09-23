@@ -95,16 +95,25 @@ def compose_environment(port: int) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(
         {
-            "NOVNC_BIND": "127.0.0.1",
-            "NOVNC_HOST_PORT": str(port),
+            "CADDY_SITE_ADDRESS": "http://localhost",
+            "CADDY_TLS_MODE": "auto",
+            "CADDY_EDGE_BIND": "127.0.0.1",
+            "CADDY_HTTP_HOST_PORT": str(port),
+            "CADDY_HTTPS_HOST_PORT": str(free_port()),
+            "BASIC_AUTH_PASSWORD": "synthetic-auth-secret",
             "USE_TOR": "true",
             "CASHFUSION_ENABLED": "true",
-            "CASHFUSION_AUTO_FUSE": "false",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
         }
     )
     return environment
+
+
+def remove_gateway_volumes(project: str) -> None:
+    for suffix in ("caddy-data", "caddy-config", "caddy-log", "fail2ban-state", "caddy-ban-state", "caddy-control"):
+        command = ["docker", "volume", "rm", f"{project}_{suffix}"]
+        record_cleanup_result(run(command), command)
 
 
 def wait_running(
@@ -184,7 +193,10 @@ def wait_novnc(port: int, timeout=60) -> None:
     last_error = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as response:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/",
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
                 if response.status == 200:
                     return
                 last_error = f"unexpected HTTP status: {response.status}"
@@ -195,8 +207,11 @@ def wait_novnc(port: int, timeout=60) -> None:
 
 
 def test_static_provenance() -> None:
+    environment = os.environ.copy()
+    environment["BASIC_AUTH_PASSWORD"] = "synthetic-auth-secret"
     compose = run(
-        ["docker", "compose", "--env-file", str(ENV_FILE), "config", "--format", "json"]
+        ["docker", "compose", "--env-file", str(ENV_FILE), "config", "--format", "json"],
+        env=environment,
     )
     assert compose.returncode == 0, compose.stdout + compose.stderr
     resolved = json.loads(compose.stdout)
@@ -535,6 +550,7 @@ def test_runtime() -> None:
             for volume in (wallet_volume, tor_volume):
                 volume_command = ["docker", "volume", "rm", volume]
                 record_cleanup_result(run(volume_command, timeout=30), volume_command)
+            remove_gateway_volumes(project)
 
     canonical_after = run(["docker", "volume", "inspect", "bchforge-electron-cash-data"])
     assert (canonical_before.returncode, canonical_before.stdout, canonical_before.stderr) == (

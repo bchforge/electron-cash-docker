@@ -13,19 +13,35 @@ services:
     image: ${ELECTRON_CASH_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}}
     restart: "on-failure:5"
     stop_grace_period: 15s
-    ports:
-      - "${NOVNC_BIND:?NOVNC_BIND must be set in .env}:${NOVNC_HOST_PORT:?NOVNC_HOST_PORT must be set in .env}:6080"
+    expose:
+      - "6080"
     environment:
       MODE: ${MODE:-novnc}
       USE_TOR: ${USE_TOR:?USE_TOR must be set in .env}
-      CASHFUSION_ENABLED: ${CASHFUSION_ENABLED:?CASHFUSION_ENABLED must be set in .env}
-      CASHFUSION_AUTO_FUSE: ${CASHFUSION_AUTO_FUSE:?CASHFUSION_AUTO_FUSE must be set in .env}
+      TESTNET4: ${TESTNET4:-false}
+      CASHFUSION_ENABLED: ${CASHFUSION_ENABLED:-true}
+      CASHFUSION_AUTO_FUSE: ${CASHFUSION_AUTO_FUSE:-false}
+      CASHFUSION_FUSION_MODE: ${CASHFUSION_FUSION_MODE:-custom}
+      CASHFUSION_FUSE_DEPTH: ${CASHFUSION_FUSE_DEPTH:-3}
+      CASHFUSION_SELF_FUSE_PLAYERS: ${CASHFUSION_SELF_FUSE_PLAYERS:-1}
+      CASHFUSION_SELECTOR_MODE: ${CASHFUSION_SELECTOR_MODE:-count}
+      CASHFUSION_SELECTOR_COUNT: ${CASHFUSION_SELECTOR_COUNT:-10}
+      CASHFUSION_SELECTOR_SIZE_BCH: ${CASHFUSION_SELECTOR_SIZE_BCH:-0.0001}
+      CASHFUSION_SELECTOR_FRACTION: ${CASHFUSION_SELECTOR_FRACTION:-1.0}
+      CASHFUSION_QUEUED_AUTOFUSE: ${CASHFUSION_QUEUED_AUTOFUSE:-4}
+      CASHFUSION_AUTOFUSE_CONFIRMED_ONLY: ${CASHFUSION_AUTOFUSE_CONFIRMED_ONLY:-true}
       JSONRPC_ENABLED: ${JSONRPC_ENABLED:-false}
       JSONRPC_USER: ${JSONRPC_USER:-}
       JSONRPC_PASSWORD: ${JSONRPC_PASSWORD:-}
       JSONRPC_PORT: ${JSONRPC_PORT:-50001}
       WALLET_AUTO_CREATE: ${WALLET_AUTO_CREATE:-false}
       TEST_WALLET_PASSWORD: ${TEST_WALLET_PASSWORD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'electroncash-daemon-wrapper|electron-cash' > /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     volumes:
       - electron-cash-data:/home/electroncash/.electron-cash
     depends_on:
@@ -33,6 +49,110 @@ services:
         condition: service_started
     networks:
       - electron-network
+
+  auth-session:
+    build:
+      context: .
+      dockerfile: docker/auth-session/Dockerfile
+    image: ${AUTH_SESSION_IMAGE:-electron-cash-docker-auth-session:0.3}
+    restart: on-failure:5
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:?BASIC_AUTH_PASSWORD must be set to a real password before starting Electron Cash Docker}
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-http://localhost}
+    expose:
+      - "8080"
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8080), 1); s.close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    networks:
+      - electron-network
+
+  caddy:
+    build:
+      context: ./docker/caddy
+      dockerfile: Dockerfile
+    image: ${CADDY_IMAGE:-electron-cash-docker-caddy:0.3}
+    restart: on-failure:5
+    entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
+    depends_on:
+      electron-cash:
+        condition: service_started
+      auth-session:
+        condition: service_started
+    ports:
+      - "${CADDY_EDGE_BIND:-127.0.0.1}:${CADDY_HTTP_HOST_PORT:-80}:80"
+      - "${CADDY_EDGE_BIND:-127.0.0.1}:${CADDY_HTTPS_HOST_PORT:-443}:443"
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-http://localhost}
+      CADDY_TLS_MODE: ${CADDY_TLS_MODE:-auto}
+      CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-}
+      ECD_MODE: ${MODE:-novnc}
+      AUTH_SESSION_UPSTREAM: auth-session:8080
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-log:/var/log/caddy
+      - caddy-ban-state:/var/lib/caddy-bans
+      - caddy-control:/run/caddy
+      - type: bind
+        source: ./docker/caddy-entrypoint.sh
+        target: /etc/caddy/entrypoint.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - electron-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --unix-socket /run/caddy/admin.sock http://localhost/config/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  fail2ban:
+    build:
+      context: ./docker/fail2ban
+      dockerfile: Dockerfile
+    image: ${FAIL2BAN_IMAGE:-electron-cash-docker-fail2ban:0.3}
+    restart: on-failure:5
+    depends_on:
+      caddy:
+        condition: service_healthy
+        restart: true
+    network_mode: service:caddy
+    cap_add: [NET_ADMIN]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      FAIL2BAN_MAXRETRY: ${FAIL2BAN_MAXRETRY:-5}
+      FAIL2BAN_FINDTIME: ${FAIL2BAN_FINDTIME:-600}
+      FAIL2BAN_BANTIME: ${FAIL2BAN_BANTIME:-3600}
+      FAIL2BAN_IGNOREIP: ${FAIL2BAN_IGNOREIP:-127.0.0.0/8 ::1}
+      CADDY_EDGE_BIND: ${CADDY_EDGE_BIND:-127.0.0.1}
+    volumes:
+      - caddy-log:/var/log/caddy:ro
+      - caddy-ban-state:/var/lib/caddy-bans
+      - caddy-control:/run/caddy
+      - fail2ban-state:/var/lib/fail2ban
+    tmpfs:
+      - /tmp
+      - /run
+    healthcheck:
+      test: ["CMD-SHELL", "fail2ban-client status caddy-basicauth >/dev/null 2>&1 && /usr/local/bin/caddy-ban check >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
   tor-proxy:
     build:
@@ -68,6 +188,12 @@ networks:
 
 volumes:
   electron-cash-data:
-    name: bchforge-electron-cash-data
+    name: ${ECD_WALLET_VOLUME:-bchforge-electron-cash-data}
   tor-data:
-    name: bchforge-electron-cash-tor-data
+    name: ${ECD_TOR_VOLUME:-bchforge-electron-cash-tor-data}
+  caddy-data:
+  caddy-config:
+  caddy-log:
+  fail2ban-state:
+  caddy-ban-state:
+  caddy-control:

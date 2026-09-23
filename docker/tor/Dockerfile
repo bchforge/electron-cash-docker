@@ -14,9 +14,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    gnupg \
+    ca-certificates=20260601~24.04.1 \
+    curl=8.5.0-2ubuntu10.13 \
+    gnupg=2.4.4-2ubuntu17.6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY tor-release-keys.asc /usr/local/share/tor/tor-release-keys.asc
@@ -80,15 +80,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libevent-dev \
-    liblzma-dev \
-    libseccomp-dev \
-    libssl-dev \
-    libzstd-dev \
-    pkg-config \
-    python3 \
-    zlib1g-dev \
+    build-essential=12.10ubuntu1 \
+    libevent-dev=2.1.12-stable-9ubuntu2.1 \
+    liblzma-dev=5.6.1+really5.4.5-1ubuntu0.3 \
+    libseccomp-dev=2.5.5-1ubuntu3.1 \
+    libssl-dev=3.0.13-0ubuntu3.15 \
+    libzstd-dev=1.5.5+dfsg2-2build1.1 \
+    pkg-config=1.8.1-2build1 \
+    python3=3.12.3-0ubuntu2.1 \
+    zlib1g-dev=1:1.3.dfsg-3.1ubuntu2.2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY healthcheck.c /tmp/tor-healthcheck.c
@@ -134,14 +134,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libevent-2.1-7t64 \
-    libevent-pthreads-2.1-7t64 \
-    liblzma5 \
-    libseccomp2 \
-    libssl3t64 \
-    libzstd1 \
-    zlib1g \
+    ca-certificates=20260601~24.04.1 \
+    libevent-2.1-7t64=2.1.12-stable-9ubuntu2.1 \
+    libevent-pthreads-2.1-7t64=2.1.12-stable-9ubuntu2.1 \
+    liblzma5=5.6.1+really5.4.5-1ubuntu0.3 \
+    libseccomp2=2.5.5-1ubuntu3.1 \
+    libssl3t64=3.0.13-0ubuntu3.15 \
+    libzstd1=1.5.5+dfsg2-2build1.1 \
+    zlib1g=1:1.3.dfsg-3.1ubuntu2.2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=tor-builder /tmp/tor-root/usr/local/bin/tor /usr/local/bin/tor

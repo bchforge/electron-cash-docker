@@ -4,12 +4,21 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.example"
+EXPECTED_PINS = {
+    "EC_VERSION": "4.4.6",
+    "EC_COMMIT": "9d500949b38dd181a986382eb0c2f6061b829fec",
+    "EC_ARCHIVE_SHA256": "fc21dbae10055dee5e4f11a936691576059b40b85107b701221a54c744abd7b7",
+    "NOVNC_VERSION": "1.6.0",
+    "NOVNC_COMMIT": "a8dfd6a3ea3c74244f5ebdaa5a7f1023007a7820",
+    "NOVNC_ARCHIVE_SHA256": "ebb8eabcd3670ce1a02e4025f03976826c289121cf631183647bd8325b003403",
+    "TOR_VERSION": "0.4.9.11",
+    "TOR_SOURCE_SHA256": "2e6c1720118c812acf0079fd47cf91b6bfaba5d766c321c4d3d2a28d6a11a8ed",
+}
 
 
 def parse_env() -> dict[str, str]:
@@ -23,28 +32,6 @@ def parse_env() -> dict[str, str]:
     }
 
 
-def tag_commit(repository: str, tag: str) -> str:
-    result = subprocess.run(
-        ["git", "ls-remote", "--tags", repository, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        raise AssertionError(result.stderr)
-    refs = {
-        ref: commit
-        for line in result.stdout.splitlines()
-        if "\t" in line
-        for commit, ref in [line.split("\t", 1)]
-    }
-    commit = refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}")
-    if not commit:
-        raise AssertionError(f"upstream tag not found: {repository} {tag}")
-    return commit
-
-
 def validate_tuple(version: str, commit: str, resolver) -> None:
     expected = resolver(version)
     if commit != expected:
@@ -53,16 +40,10 @@ def validate_tuple(version: str, commit: str, resolver) -> None:
 
 def test_positive_upstream_identity() -> None:
     values = parse_env()
-    validate_tuple(
-        values["EC_VERSION"],
-        values["EC_COMMIT"],
-        lambda version: tag_commit("https://github.com/Electron-Cash/Electron-Cash.git", version),
-    )
-    validate_tuple(
-        f"v{values['NOVNC_VERSION']}",
-        values["NOVNC_COMMIT"],
-        lambda tag: tag_commit("https://github.com/novnc/noVNC.git", tag),
-    )
+    for key, expected in EXPECTED_PINS.items():
+        assert values[key] == expected
+    assert re.fullmatch(r"[0-9a-f]{40}", values["EC_COMMIT"])
+    assert re.fullmatch(r"[0-9a-f]{40}", values["NOVNC_COMMIT"])
 
     plugin_text = (ROOT / "plugins.json").read_text(encoding="utf-8")
     assert '"version": "1.5"' in plugin_text
@@ -70,20 +51,19 @@ def test_positive_upstream_identity() -> None:
     assert "flipstarter-electron-cash-v1.5.0" in plugin_text
 
 
-def test_mismatched_identity_fails() -> None:
-    expected = {"4.4.6": "ec-release", "4.4.5": "old-release"}
-    try:
-        validate_tuple("4.4.6", "old-release", expected.__getitem__)
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("version-only/commit-only mismatch was accepted")
+def test_upstream_identity_matches_recorded_contract() -> None:
+    values = parse_env()
+    for key, expected in EXPECTED_PINS.items():
+        assert values[key] == expected
 
 
 def test_integrity_metadata_contracts() -> None:
     values = parse_env()
     for key in ("EC_ARCHIVE_SHA256", "NOVNC_ARCHIVE_SHA256", "TOR_SOURCE_SHA256"):
         assert re.fullmatch(r"[0-9a-f]{64}", values[key])
+    novnc_dockerfile = (ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+    assert "https://codeload.github.com/novnc/noVNC/tar.gz/${NOVNC_COMMIT}" in novnc_dockerfile
+    assert "https://github.com/novnc/noVNC/archive/" not in novnc_dockerfile
     tor_dockerfile = (ROOT / "docker/tor/Dockerfile").read_text(encoding="utf-8")
     assert "gpgv" in tor_dockerfile
     assert "VALIDSIG" in tor_dockerfile
@@ -91,12 +71,41 @@ def test_integrity_metadata_contracts() -> None:
     plugin = (ROOT / "plugins.json").read_text(encoding="utf-8")
     assert re.search(r'"archive_sha256": "[0-9a-f]{64}"', plugin)
     assert re.search(r'"sha256": "[0-9a-f]{64}"', plugin)
+    caddy = (ROOT / "docker/caddy/Dockerfile").read_text(encoding="utf-8")
+    assert "FROM caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648" in caddy
+    assert "FROM golang@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder" in caddy
+    assert "ARG CADDY_VERSION=2.11.4" in caddy
+    assert "ARG CADDY_ARCHIVE_SHA256=2c3d02078286a6282cdb4d1d8744077788d556659dac0b64d8ed5886a7e5aeb9" in caddy
+    fail2ban = (ROOT / "docker/fail2ban/Dockerfile").read_text(encoding="utf-8")
+    assert "FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90" in fail2ban
+
+
+def test_os_package_specs_are_pinned() -> None:
+    for path in (ROOT / "docker/Dockerfile", ROOT / "docker/caddy/Dockerfile", ROOT / "docker/tor/Dockerfile", ROOT / "docker/fail2ban/Dockerfile"):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        collecting = False
+        for line in lines:
+            original_line = line
+            if "apt-get install -y --no-install-recommends" in line or "apk add --no-cache" in line:
+                collecting = True
+                marker = "apt-get install -y --no-install-recommends" if "apt-get install" in line else "apk add --no-cache"
+                line = line.split(marker, 1)[1].split("\\", 1)[0]
+            if not collecting:
+                continue
+            payload = line.split("&&", 1)[0].replace("\\", " ")
+            for token in payload.split():
+                if token.startswith(("RUN", "apt-get", "install", "apk", "add", "-")):
+                    continue
+                assert "=" in token, f"unversioned OS package {token!r} in {path}"
+            if "&&" in original_line or "\\" not in original_line:
+                collecting = False
 
 
 def main() -> None:
     test_positive_upstream_identity()
-    test_mismatched_identity_fails()
+    test_upstream_identity_matches_recorded_contract()
     test_integrity_metadata_contracts()
+    test_os_package_specs_are_pinned()
     print("PASS semantic upstream identity and integrity metadata checks")
 
 

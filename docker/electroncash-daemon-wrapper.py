@@ -36,14 +36,15 @@ def install_test_wallet_password():
     Daemon.load_wallet = load_wallet
 
 
-def install_cashfusion_autofuse():
-    enabled = os.environ.get("CASHFUSION_ENABLED", "false") == "true"
-    auto_fuse = os.environ.get("CASHFUSION_AUTO_FUSE", "false") == "true"
+def install_cashfusion_defaults():
+    from cashfusion_defaults import cashfusion_config_from_environment
+
+    enabled = cashfusion_config_from_environment()["enabled"]
     if not enabled:
         return
 
     from electroncash.daemon import Daemon
-    from cashfusion_autofuse import apply_cashfusion_autofuse
+    from cashfusion_defaults import apply_cashfusion_defaults
 
     original_load_wallet = Daemon.load_wallet
 
@@ -58,14 +59,13 @@ def install_cashfusion_autofuse():
             return wallet
 
         try:
-            # Apply the deployment setting before the plugin reads it. The
-            # password is only the one already accepted by Daemon.load_wallet.
-            apply_cashfusion_autofuse(wallet, enabled, auto_fuse)
+            apply_cashfusion_defaults(wallet)
             if not getattr(wallet, "_docker_cashfusion_attached", False):
                 plugin.add_wallet(wallet, wallet_password)
                 wallet._docker_cashfusion_attached = True
         except Exception as error:
-            wallet.print_error(f"[fusion] failed to apply environment autofuse: {error}")
+            wallet.print_error(f"[fusion] failed to apply wallet defaults: {error}")
+            raise RuntimeError("CashFusion deployment policy failed closed") from error
         return wallet
 
     Daemon.load_wallet = load_wallet
@@ -75,7 +75,7 @@ def main():
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     install_test_wallet_password()
-    install_cashfusion_autofuse()
+    install_cashfusion_defaults()
     sys.argv[0] = APP_PATH
     runpy.run_path(APP_PATH, run_name="__main__")
 

@@ -2,31 +2,32 @@
 
 set -euo pipefail
 
-CASHFUSION_ENABLED=${CASHFUSION_ENABLED:-false}
-CASHFUSION_AUTO_FUSE=${CASHFUSION_AUTO_FUSE:-false}
-
-case "${CASHFUSION_ENABLED}" in
-    true|false) ;;
-    *) echo "[!] CASHFUSION_ENABLED must be true or false"; exit 1 ;;
-esac
-case "${CASHFUSION_AUTO_FUSE}" in
-    true|false) ;;
-    *) echo "[!] CASHFUSION_AUTO_FUSE must be true or false"; exit 1 ;;
-esac
-
 CONFIG_FILE="${CONFIG_FILE:-/home/electroncash/.electron-cash/config}"
 CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
+CASHFUSION_ENABLED="${CASHFUSION_ENABLED:-true}"
+CASHFUSION_ENABLED="${CASHFUSION_ENABLED,,}"
 
 mkdir -p "${CONFIG_DIR}"
 
-CONFIG_FILE="${CONFIG_FILE}" CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" python3 - <<'PY'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${CONFIG_FILE}" PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python3 - <<'PY'
 import json
 import os
 import tempfile
 
+from cashfusion_defaults import (
+    CashFusionConfigurationError,
+    cashfusion_config_from_environment,
+)
+
 config_path = os.environ["CONFIG_FILE"]
 config_dir = os.path.dirname(config_path) or "."
-enabled = os.environ["CASHFUSION_ENABLED"] == "true"
+
+try:
+    enabled = cashfusion_config_from_environment()["enabled"]
+except CashFusionConfigurationError as error:
+    print(f"[!] {error}")
+    raise SystemExit(1)
 
 try:
     with open(config_path) as handle:
@@ -59,14 +60,7 @@ PY
 chmod 600 "${CONFIG_FILE}"
 
 if [ "${CASHFUSION_ENABLED}" = "true" ]; then
-    if [ "${CASHFUSION_AUTO_FUSE}" = "true" ]; then
-        echo "[+] CashFusion enabled (auto-fuse applies when a wallet opens)"
-    else
-        echo "[+] CashFusion enabled (auto-fuse disabled)"
-    fi
+    echo "[+] CashFusion enabled (missing wallet defaults apply when eligible wallets open)"
 else
-    if [ "${CASHFUSION_AUTO_FUSE}" = "true" ]; then
-        echo "[*] CashFusion autofuse ignored (plugin disabled)"
-    fi
     echo "[*] CashFusion disabled"
 fi
