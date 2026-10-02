@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "synthetic_transport_contract",
+  "source": {
+    "electron_cash_commit": "9d500949b38dd181a986382eb0c2f6061b829fec",
+    "btchip_python_version": "0.1.32",
+    "ledger_backend": "electroncash_plugins.ledger.ledger.LedgerPlugin.get_btchip_device"
+  },
+  "transport": {
+    "channel": "0101",
+    "tag": "05",
+    "packet_size": 64,
+    "success_response_hex": "aabb9000",
+    "success_payload_hex": "aabb",
+    "cancel_status_hex": "6985",
+    "unsupported_status_hex": "6d00",
+    "malformed_channel_response_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "truncated_response_hex": "01010500000004aabb"
+  },
+  "limitations": [
+    "Deterministic synthetic APDU responses; not recorded from a Ledger device.",
+    "Does not emulate USB kernel, udev, firmware, display approval, or physical PIN behavior."
+  ]
+}

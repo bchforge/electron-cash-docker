@@ -14,7 +14,7 @@ def test_runtime_version_is_configured() -> None:
     entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
     compose = COMPOSE.read_text(encoding="utf-8")
 
-    assert VERSION.read_text(encoding="utf-8").strip() == "0.3"
+    assert VERSION.read_text(encoding="utf-8").strip() == "0.4"
     assert "ECD_VERSION_FILE=/etc/electroncash-docker/VERSION" in entrypoint
     assert "ECD_PRODUCT_VERSION=$(tr -d" in entrypoint
     assert 'echo "[*] Starting ${ECD_PRODUCT_VERSION} noVNC wallet"' in entrypoint

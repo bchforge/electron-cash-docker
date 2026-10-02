@@ -8,6 +8,7 @@ import socket
 import subprocess
 import time
 import uuid
+from test_support import unique_resource
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -102,9 +103,9 @@ def seed_identity(state: str, client_ip: str) -> None:
 
 def main() -> None:
     suffix = uuid.uuid4().hex[:10]
-    network = f"ecd-caddy-ban-network-{suffix}"
-    state = f"ecd-caddy-ban-state-{suffix}"
-    control = f"ecd-caddy-ban-control-{suffix}"
+    network = unique_resource("caddy-ban-network", kind="network")
+    state = unique_resource("caddy-ban-state")
+    control = unique_resource("caddy-ban-control")
     caddy = f"ecd-caddy-ban-caddy-{suffix}"
     clients = [f"ecd-caddy-ban-client-{suffix}-{letter}" for letter in ("a", "b")]
     port = free_port()

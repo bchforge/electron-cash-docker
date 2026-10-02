@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4
+
+- Added native desktop access for Electron Cash on Linux through X11 and on
+  macOS through XQuartz, so the wallet can be opened directly in a desktop
+  window without using noVNC.
+- Added generic `NETWORK` selection for `mainnet`, `testnet`, `testnet4`,
+  `scalenet`, `chipnet`, and `regtest`, with isolated wallet state, fail-fast
+  selector validation, and network-aware encrypted backup/restore. Mainnet
+  remains the default; Chipnet is the test/demo network.
+- Added opt-in Ledger support for the native Linux Docker Engine GUI path.
+- Updated pinned Ubuntu `curl` and Xvfb packages and aligned `python-dateutil`
+  with Electron Cash 4.4.6.
+
 ## v0.3
 
 - Added a unified Caddy gateway protecting the noVNC HTML/assets and
@@ -56,8 +69,7 @@ image-security validation for the v0.3 release.
   after the candidate scan identified fixable high-severity vulnerabilities;
   the remaining direct runtime pins are unchanged.
 - Preserved the existing Electron Cash, noVNC, Tor, plugin, GUI, headless, RPC,
-  persistence, CashFusion, and testnet4 contracts. This is a maintenance
-  baseline, not a new funded product milestone, and it is not a deployment.
+  persistence, CashFusion, and testnet4 contracts.
 
 ## v0.2
 

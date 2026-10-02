@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from test_support import electron_cash_image
@@ -19,6 +20,8 @@ EXPECTED_ARCHIVE_SHA256 = (
     "fc21dbae10055dee5e4f11a936691576059b40b85107b701221a54c744abd7b7"
 )
 PYTHON = "/opt/electroncash-venv/bin/python"
+sys.path.insert(0, str(ROOT / "docker"))
+from network_selection import NETWORK_FLAGS
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -107,10 +110,30 @@ def test_runtime_package(image: str) -> None:
     assert result.stdout.splitlines() == [EXPECTED_VERSION, EXPECTED_VERSION]
 
 
+def test_upstream_network_mapping(image: str) -> None:
+    """Detect selector and data-path drift in the actual installed pinned image."""
+    code = '''import inspect, json, re
+from electroncash.commands import get_parser
+from electroncash.simple_config import SimpleConfig
+parser = get_parser()
+flags = {option for action in parser._actions for option in action.option_strings}
+source = inspect.getsource(SimpleConfig.electrum_path)
+directories = set(re.findall(r"(?:if|elif) self.get\\('([a-z0-9_]+)'\\):\\s+path = os.path.join\\(path, '([a-z0-9_]+)'\\)", source))
+print(json.dumps({"flags": sorted(flags), "directories": sorted(directories)}))'''
+    result = run(["docker", "run", "--pull=never", "--rm", "--network", "none",
+                  "--entrypoint", PYTHON, image, "-c", code])
+    assert result.returncode == 0, result.stdout + result.stderr
+    upstream = json.loads(result.stdout)
+    selected = {flag for flag in NETWORK_FLAGS.values() if flag}
+    assert upstream["directories"] == [[key, key] for key in sorted(NETWORK_FLAGS) if key != "mainnet"]
+    assert selected <= set(upstream["flags"])
+
+
 def main() -> None:
     values = test_declared_pins()
     image = test_compose_image(values)
     test_runtime_package(image)
+    test_upstream_network_mapping(image)
     print("PASS Electron Cash pins, Compose image tag, and installed package version")
 
 

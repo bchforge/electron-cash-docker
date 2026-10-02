@@ -1,7 +1,14 @@
 services:
+  auth-session:
+    profiles: [remote-only]
+  caddy:
+    profiles: [remote-only]
+  fail2ban:
+    profiles: [remote-only]
   electron-cash:
     environment:
       MODE: headless
       JSONRPC_ENABLED: "true"
+      ECD_RPC_OVERLAY: "true"
     ports:
       - "127.0.0.1:${JSONRPC_HOST_PORT:-50001}:${JSONRPC_PORT:-50001}"

@@ -10,7 +10,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates=20260601~24.04.1 \
-    curl=8.5.0-2ubuntu10.13 \
+    curl=8.5.0-2ubuntu10.15 \
     git=1:2.43.0-1ubuntu7.3 \
     build-essential=12.10ubuntu1 \
     cmake=3.28.3-1build7 \
@@ -32,10 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /tmp/electron-cash
 
+# Build only the pinned secp256k1 submodule used by make_secp. Optional ZBar,
+# OpenSSL, libevent, zlib, and Tor source builds are not enabled in this image;
+# locale data is copied from the separately verified release archive below.
 RUN git clone https://github.com/Electron-Cash/Electron-Cash.git . && \
     git checkout --detach "${EC_COMMIT}" && \
-    git submodule sync --recursive && \
-    git submodule update --init --recursive && \
+    git submodule sync -- contrib/secp256k1 && \
+    git submodule update --init -- contrib/secp256k1 && \
     ./contrib/make_secp
 
 COPY docker/electron-cash-cve-2024-23342.patch /tmp/electron-cash-cve-2024-23342.patch
@@ -67,7 +70,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates=20260601~24.04.1 \
-    curl=8.5.0-2ubuntu10.13 \
+    curl=8.5.0-2ubuntu10.15 \
     python3=3.12.3-0ubuntu2.1 \
     tar=1.35+dfsg-3ubuntu0.4 \
     && rm -rf /var/lib/apt/lists/*
@@ -84,6 +87,7 @@ FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebff
 ARG NOVNC_VERSION
 ARG NOVNC_COMMIT
 ARG NOVNC_ARCHIVE_SHA256
+ARG HW_SUPPORT=0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -91,7 +95,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates=20260601~24.04.1 \
-    curl=8.5.0-2ubuntu10.13 \
+    curl=8.5.0-2ubuntu10.15 \
     dbus-x11=1.14.10-4ubuntu4.1 \
     fonts-dejavu-core=2.37-8 \
     fonts-freefont-ttf=20211204+svn4273-2 \
@@ -113,7 +117,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     websockify=0.10.0+dfsg1-5build2 \
     x11-utils=7.7+6build2 \
     x11vnc=0.9.16-10 \
-    xvfb=2:21.1.12-1ubuntu1.6 \
+    xauth=1:1.1.2-1build1 \
+    xvfb=2:21.1.12-1ubuntu1.8 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o "/tmp/novnc-${NOVNC_VERSION}.tar.gz" \
@@ -127,6 +132,23 @@ RUN curl -fsSL -o "/tmp/novnc-${NOVNC_VERSION}.tar.gz" \
 RUN python3 -c 'from pathlib import Path; path=Path("/opt/noVNC/vnc.html"); text=path.read_text(encoding="utf-8"); title="<title>noVNC</title>"; branded="<title>Electron Cash Docker</title>"; favicon="<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">"; assert text.count(title) == 1, "expected exactly one unbranded noVNC title"; text=text.replace(title, branded, 1); head_start=text.find("<head>"); head_end=text.find("</head>", head_start); assert head_start >= 0 and head_end > head_start, "vnc.html head is missing"; assert text.count(favicon) <= 1, "duplicate Electron Cash Docker favicon links"; text=text if favicon in text else text[:head_end] + "  " + favicon + "\n" + text[head_end:]; path.write_text(text, encoding="utf-8"); head_start=text.find("<head>"); head_end=text.find("</head>", head_start); favicon_index=text.find(favicon); assert text.count(branded) == 1, "expected exactly one branded noVNC title"; assert text.count(favicon) == 1 and head_start < favicon_index < head_end, "expected exactly one favicon link inside head"'
 
 COPY --from=builder /opt/electroncash-venv /opt/electroncash-venv
+
+# Ledger's pinned upstream plugin imports hid and btchip. Keep these libraries
+# out of the ordinary image; the overlay opts in to this separate build path.
+RUN if [ "${HW_SUPPORT}" = 1 ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            libhidapi-libusb0=0.14.0-1build1 \
+            && rm -rf /var/lib/apt/lists/* && \
+        /opt/electroncash-venv/bin/pip install --no-cache-dir hidapi==0.14.0.post4 && \
+        curl -fsSL -o /tmp/btchip-python.tar.gz \
+            https://files.pythonhosted.org/packages/30/fd/16394adaff5736840aeda77163d5f6f593091d687a1807ff02dedcfc7bca/btchip-python-0.1.32.tar.gz && \
+        echo '34f5e0c161c08f65dc0d070ba2ff4c315ed21c4b7e0faa32a46862d0dc1b8f55  /tmp/btchip-python.tar.gz' | sha256sum -c - && \
+        mkdir /tmp/btchip-source && tar xzf /tmp/btchip-python.tar.gz -C /tmp/btchip-source --strip-components=1 && \
+        python3 -c 'from pathlib import Path; p=Path("/tmp/btchip-source/setup.py"); s=p.read_text(); old="python-pyscard>=1.6.12-4build1"; assert s.count(old)==1; p.write_text(s.replace(old, "pyscard>=1.6.12"))' && \
+        /opt/electroncash-venv/bin/pip install --no-cache-dir --no-deps /tmp/btchip-source && \
+        rm -rf /tmp/btchip-source /tmp/btchip-python.tar.gz && \
+        /opt/electroncash-venv/bin/pip check; \
+    elif [ "${HW_SUPPORT}" != 0 ]; then exit 1; fi
 COPY --from=plugin-builder /build-plugins/zips/ /preinstalled-plugins/
 COPY --from=plugin-builder /build-plugins/plugins.json /preinstalled-plugins/plugins.json
 
@@ -159,6 +181,8 @@ RUN python3 -c 'from pathlib import Path; path=Path("/opt/noVNC/vnc.html"); text
 COPY --chown=electroncash:electroncash docker/entrypoint.sh /home/electroncash/entrypoint.sh
 COPY --chown=electroncash:electroncash docker/cashfusion.sh /home/electroncash/cashfusion.sh
 COPY --chown=electroncash:electroncash docker/cashfusion_defaults.py /home/electroncash/cashfusion_defaults.py
+COPY --chown=electroncash:electroncash docker/network_selection.py /home/electroncash/network_selection.py
+COPY docker/prepare-xauthority.py /home/electroncash/prepare-xauthority.py
 COPY --chown=electroncash:electroncash docker/backup_tool.py /home/electroncash/backup_tool.py
 COPY --chown=electroncash:electroncash docker/backup.sh /home/electroncash/backup.sh
 COPY --chown=electroncash:electroncash docker/electroncash-wrapper.py /home/electroncash/electroncash-wrapper.py

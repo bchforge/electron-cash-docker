@@ -7,12 +7,14 @@ import subprocess
 import re
 import importlib.util
 import os
+import sys
 import time
 from pathlib import Path
 from unittest import SkipTest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "docker"))
 POSIX = ROOT / "scripts" / "backup.sh"
 POWERSHELL = ROOT / "scripts" / "backup.ps1"
 DOCKER_HELPER = ROOT / "docker" / "backup.sh"
@@ -155,6 +157,19 @@ def test_wrappers_use_docker_for_archive_and_archive_copying() -> None:
     assert "replace" in powershell and "restore-snapshot" in powershell
 
 
+def test_backup_network_comes_from_the_effective_compose_service() -> None:
+    posix = POSIX.read_text(encoding="utf-8")
+    powershell = POWERSHELL.read_text(encoding="utf-8")
+    helper = DOCKER_HELPER.read_text(encoding="utf-8")
+    assert 'config --format json' in posix
+    assert 'network_selection.py --compose' in posix
+    assert 'network_selection.py --env-json' in posix
+    assert 'config --format json' in powershell
+    assert 'network_selection.py --compose' in powershell
+    assert 'network_selection.py --env-json' in powershell
+    assert 'network_selection.py --validate' in helper
+
+
 def test_no_durable_protocol_in_backup_production() -> None:
     production = "\n".join(
         path.read_text(encoding="utf-8")
@@ -294,6 +309,7 @@ if __name__ == "__main__":
         test_public_help_is_exact,
         test_public_name_validation_happens_before_docker,
         test_wrappers_use_docker_for_archive_and_archive_copying,
+        test_backup_network_comes_from_the_effective_compose_service,
         test_no_durable_protocol_in_backup_production,
         test_helper_has_no_docker_daemon_access_and_tool_keeps_archive_checks,
         test_shutdown_marker_is_consumed_as_a_one_shot_event,

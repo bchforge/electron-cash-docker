@@ -22,6 +22,7 @@ from pathlib import Path
 
 from test_support import (
     electron_cash_image,
+    remove_owned_volume,
     record_cleanup_result,
     tor_image,
     unique_project,
@@ -112,8 +113,7 @@ def compose_environment(port: int) -> dict[str, str]:
 
 def remove_gateway_volumes(project: str) -> None:
     for suffix in ("caddy-data", "caddy-config", "caddy-log", "fail2ban-state", "caddy-ban-state", "caddy-control"):
-        command = ["docker", "volume", "rm", f"{project}_{suffix}"]
-        record_cleanup_result(run(command), command)
+        remove_owned_volume(f"{project}_{suffix}")
 
 
 def wait_running(
@@ -150,7 +150,7 @@ def wait_healthy(container: str, timeout=90) -> None:
     raise AssertionError(f"Tor healthcheck timed out\n{logs.stdout}{logs.stderr}")
 
 
-def wait_bootstrap(container: str, *, previous_output="", timeout=180) -> str:
+def wait_bootstrap(container: str, *, previous_output="", timeout=420) -> str:
     deadline = time.monotonic() + timeout
     output = ""
     while time.monotonic() < deadline:
@@ -299,41 +299,47 @@ def test_missing_and_bad_pins_fail_closed() -> None:
         assert result.returncode != 0
         assert "TOR_SOURCE_SHA256" in result.stdout + result.stderr
 
-    result = run(
-        [
-            "docker",
-            "build",
-            "--target",
-            "tor-verifier",
-            "--build-arg",
-            "TOR_VERSION=0x4x9x11",
-            "--build-arg",
-            f"TOR_SOURCE_SHA256={TOR_SOURCE_SHA256}",
-            "./docker/tor",
-        ],
-        timeout=180,
-    )
-    assert result.returncode != 0
-    assert "TOR_VERSION must be a stable numeric Tor release" in result.stdout + result.stderr
+    verifier_project = unique_project("tor-verifier")
+    verifier_image = unique_resource("tor-verifier-image", kind="image")
+    with tempfile.TemporaryDirectory(prefix="ecd-tor-verifier-") as temporary:
+        compose_file = Path(temporary) / "compose.yml"
+        expected_failure_events = Path(temporary) / "expected-failure-events.jsonl"
+        compose_file.write_text(
+            "services:\n"
+            "  tor-verifier:\n"
+            f"    image: {verifier_image}\n"
+            "    build:\n"
+            f"      context: {TOR_DIR}\n"
+            "      dockerfile: Dockerfile\n"
+            "      target: tor-verifier\n"
+            "      args:\n"
+            "        TOR_VERSION: ${TOR_VERSION:?TOR_VERSION must be set}\n"
+            "        TOR_SOURCE_SHA256: ${TOR_SOURCE_SHA256:?TOR_SOURCE_SHA256 must be set}\n",
+            encoding="utf-8",
+        )
+        verifier_compose = ["docker", "compose", "--env-file", str(ENV_FILE), "-p", verifier_project,
+                            "-f", str(compose_file)]
+        bad_version_environment = {**os.environ, "TOR_VERSION": "0x4x9x11",
+                                   "TOR_SOURCE_SHA256": TOR_SOURCE_SHA256,
+                                   # These negative builds must not contaminate the gate's failure ledger.
+                                   "CI_RESOURCE_EVENT_LOG": str(expected_failure_events)}
+        result = run([*verifier_compose, "--progress", "plain", "build", "--pull", "tor-verifier"],
+                     env=bad_version_environment, timeout=180)
+        assert result.returncode != 0
+        assert "TOR_VERSION must be a stable numeric Tor release" in result.stdout + result.stderr
 
-    result = run(
-        [
-            "docker",
-            "build",
-            "--no-cache",
-            "--progress=plain",
-            "--target",
-            "tor-verifier",
-            "--build-arg",
-            f"TOR_VERSION={TOR_VERSION}",
-            "--build-arg",
-            "TOR_SOURCE_SHA256=" + "0" * 64,
-            "./docker/tor",
-        ],
-        timeout=180,
-    )
-    assert result.returncode != 0
-    assert "does not match the Tor Project checksum file" in result.stdout + result.stderr
+        bad_checksum_environment = {**os.environ, "TOR_VERSION": TOR_VERSION,
+                                    "TOR_SOURCE_SHA256": "0" * 64,
+                                    "CI_RESOURCE_EVENT_LOG": str(expected_failure_events)}
+        result = run([*verifier_compose, "--progress", "plain", "build", "--pull", "--no-cache", "tor-verifier"],
+                     env=bad_checksum_environment, timeout=180)
+        assert result.returncode != 0
+        assert "does not match the Tor Project checksum file" in result.stdout + result.stderr
+        recorded = [json.loads(line) for line in expected_failure_events.read_text(encoding="utf-8").splitlines()]
+        rejected_builds = [event for event in recorded
+                           if event.get("kind") == "compose-image-build" and event.get("returncode") != 0]
+        assert len(rejected_builds) == 2 and all(event.get("targets") == "tor-verifier"
+                                                   for event in rejected_builds)
 
 
 def test_runtime() -> None:

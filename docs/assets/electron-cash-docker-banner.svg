@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 120" role="img" aria-labelledby="title desc">
-  <title id="title">BCH Forge FundMe banner</title>
-  <desc id="desc">Campaign banner for BCH Forge and Electron Cash Docker.</desc>
+  <title id="title">BCH Forge Electron Cash Docker banner</title>
+  <desc id="desc">Banner for BCH Forge and Electron Cash Docker.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="500" y2="120" gradientUnits="userSpaceOnUse"><stop stop-color="#081114"/><stop offset="1" stop-color="#10252b"/></linearGradient>
   </defs>

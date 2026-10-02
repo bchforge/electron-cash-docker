@@ -14,6 +14,7 @@ import test_compose_isolation
 import test_cloudflare_cidrs
 import test_auth_config
 import test_auth_session
+import test_compose_network
 import test_electron_cash_version
 import test_gitlab_status_adapter
 import test_novnc_sharing
@@ -24,12 +25,29 @@ import test_product_version
 import test_runtime_dependencies
 import test_security_policy
 import test_tor_proxy
+import test_network_selection
+import test_platform_runner
+import test_docker_ownership
+import test_ci_protection_preflight
+import test_disk_budget
+import test_build_reuse
+import test_mac_gui
+import test_ci_required
 
 
 def main() -> None:
     assert compileall.compile_dir(str(ROOT / "docker"), quiet=1)
     assert compileall.compile_dir(str(ROOT / "tests"), quiet=1)
     test_compose_isolation.main()
+    test_compose_network.main()
+    test_network_selection.main()
+    test_platform_runner.main()
+    test_docker_ownership.main()
+    test_ci_protection_preflight.main()
+    test_disk_budget.main()
+    test_build_reuse.main()
+    test_mac_gui.main()
+    test_ci_required.main()
     test_auth_config.static_main()
     test_auth_session.main()
     test_cloudflare_cidrs.main()

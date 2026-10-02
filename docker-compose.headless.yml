@@ -8,6 +8,7 @@ services:
   electron-cash:
     environment:
       MODE: headless
+      ECD_HEADLESS_OVERLAY: "true"
       JSONRPC_ENABLED: ${JSONRPC_ENABLED:-false}
       JSONRPC_USER: ${JSONRPC_USER:-}
       JSONRPC_PASSWORD: ${JSONRPC_PASSWORD:-}

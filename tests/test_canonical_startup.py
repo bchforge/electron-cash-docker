@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from test_auth_browser import run_browser_acceptance
+from test_support import unique_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,7 @@ def run(
         cwd=cwd,
         env=env,
         text=True,
+        errors="replace",  # BuildKit progress can contain non-UTF-8 terminal bytes.
         capture_output=True,
         check=False,
         timeout=timeout,
@@ -616,13 +618,9 @@ def acceptance_run(*, project: str, temporary: Path, base_environment: dict[str,
         assert "BASIC_AUTH_USERNAME" not in services["caddy"]["environment"]
         assert "/run/secrets" not in json.dumps(services["caddy"])
 
-        # This is deliberately the documented two-command startup, not a wrapper.
-        checked([*command, "build"], env=environment, cwd=checkout, timeout=1800)
-        checked([*command, "up", "-d"], env=environment, cwd=checkout, timeout=180)
-        for service in ("tor-proxy", "electron-cash", "auth-session", "caddy", "fail2ban"):
-            identifiers[service] = wait_running(command, service, env=environment, cwd=checkout)
-        for service in identifiers:
-            wait_healthy(identifiers[service], service)
+        # The canonical gate has already built these exact unique candidate
+        # references with --no-cache. Reuse them in this clean-checkout startup
+        # test rather than compiling a second duplicate image set here.
         images = {
             "electron-cash": environment["ELECTRON_CASH_IMAGE"],
             "tor-proxy": environment["TOR_IMAGE"],
@@ -630,6 +628,16 @@ def acceptance_run(*, project: str, temporary: Path, base_environment: dict[str,
             "fail2ban": environment["FAIL2BAN_IMAGE"],
             "auth-session": environment["AUTH_SESSION_IMAGE"],
         }
+        if environment.get("CI_CANDIDATE_IMAGES") != "1":
+            raise AssertionError("canonical startup requires the prebuilt task-owned candidate image set")
+        for image in images.values():
+            checked(["docker", "image", "inspect", image], env=environment, cwd=checkout)
+        checked([*command, "up", "--pull", "never", "-d", "--no-build"],
+                env=environment, cwd=checkout, timeout=180)
+        for service in ("tor-proxy", "electron-cash", "auth-session", "caddy", "fail2ban"):
+            identifiers[service] = wait_running(command, service, env=environment, cwd=checkout)
+        for service in identifiers:
+            wait_healthy(identifiers[service], service)
         for service, image in images.items():
             assert_candidate_image(identifiers[service], image, env=environment)
 
@@ -747,18 +755,19 @@ def main() -> None:
     base_environment["CI_STARTUP_HTTPS_PORT_FIRST"] = base_environment.get("CI_STARTUP_HTTPS_PORT", "0")
     base_environment["CI_STARTUP_HTTP_PORT_SECOND"] = str(free_port())
     base_environment["CI_STARTUP_HTTPS_PORT_SECOND"] = str(free_port())
-    project = base_environment["CI_STARTUP_PROJECT"]
+    first_project = unique_project("canonical-startup-first")
+    second_project = unique_project("canonical-startup-second")
     with tempfile.TemporaryDirectory(prefix="ecd-canonical-1-") as first_dir, tempfile.TemporaryDirectory(
         prefix="ecd-canonical-2-"
     ) as second_dir:
         acceptance_run(
-            project=f"{project}-first",
+            project=first_project,
             temporary=Path(first_dir),
             base_environment=base_environment,
             first=True,
         )
         acceptance_run(
-            project=f"{project}-second",
+            project=second_project,
             temporary=Path(second_dir),
             base_environment=base_environment,
             first=False,

@@ -67,11 +67,32 @@ def test_sast_bootstrap_failure_cannot_pass() -> None:
         sast.bootstrap_bandit = original
 
 
+def test_sast_incomplete_tool_directory_is_retained() -> None:
+    original = sast.tool_directory
+    try:
+        with tempfile.TemporaryDirectory(prefix="sast-owned-state-") as temporary:
+            target = Path(temporary) / "bandit"
+            target.mkdir()
+            sentinel = target / "foreign-marker"
+            sentinel.write_text("retain", encoding="utf-8")
+            sast.tool_directory = lambda: target
+            try:
+                sast.bootstrap_bandit()
+            except sast.SastError as error:
+                assert "retained unchanged" in str(error)
+            else:
+                raise AssertionError("incomplete pre-existing tool directory was overwritten")
+            assert sentinel.read_text(encoding="utf-8") == "retain"
+    finally:
+        sast.tool_directory = original
+
+
 def main() -> None:
     test_integrity_loss_is_visible_to_review()
     test_update_versions_are_ordered_without_mutation()
     test_sast_report_converts_to_machine_readable_sarif()
     test_sast_bootstrap_failure_cannot_pass()
+    test_sast_incomplete_tool_directory_is_retained()
     print("PASS local security and dependency tooling tests")
 
 

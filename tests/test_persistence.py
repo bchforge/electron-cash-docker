@@ -9,7 +9,8 @@ import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from test_support import electron_cash_image, record_cleanup_result, unique_project, unique_resource
+from test_support import (docker_ownership as ownership, electron_cash_image, record_cleanup_result,
+                          remove_owned_volume, resource_owner, unique_project, unique_resource)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,13 +48,13 @@ def free_port():
 
 
 def create_volume(name):
-    result = run(["docker", "volume", "create", "--label", "com.bchforge.test=true", name])
+    result = run(["docker", "volume", "create", "--label", "com.bchforge.test=true",
+                  "--label", f"{ownership.OWNER_LABEL}={resource_owner()}", name])
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def remove_volume(name):
-    command = ["docker", "volume", "rm", name]
-    record_cleanup_result(run(command), command)
+    remove_owned_volume(name)
 
 
 def remove_gateway_volumes(project):
@@ -98,7 +99,7 @@ def bootstrap_failure(volume):
     return result.stdout + result.stderr
 
 
-def compose_args(project, override, *, testnet=False):
+def compose_args(project, override, *, chipnet=False):
     args = [
         "docker",
         "compose",
@@ -109,13 +110,11 @@ def compose_args(project, override, *, testnet=False):
         "-f",
         "docker-compose.yml",
     ]
-    if testnet:
-        args.extend(["-f", "docker-compose.testnet4.yml"])
     args.extend(["-f", str(override)])
     return args
 
 
-def compose_env(port, *, testnet=False):
+def compose_env(port, *, chipnet=False):
     env = os.environ.copy()
     env.update(
         {
@@ -126,12 +125,15 @@ def compose_env(port, *, testnet=False):
             "CADDY_HTTPS_HOST_PORT": str(free_port()),
             "BASIC_AUTH_PASSWORD": GATEWAY_PASSWORD,
             "USE_TOR": "false",
+            "CHIPNET": "false",
+            "TESTNET4": "false",
+            "NETWORK": "chipnet" if chipnet else "mainnet",
             "CASHFUSION_ENABLED": "true",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
         }
     )
-    if testnet:
+    if chipnet:
         env.update(
             {
                 "WALLET_AUTO_CREATE": "true",
@@ -298,39 +300,71 @@ def test_compose_managed_persistence():
             remove_gateway_volumes(project)
 
 
-def test_testnet4_uses_internal_subdirectory():
-    project = unique_project("testnet4")
-    volume = unique_resource("testnet4-volume")
-    tor_volume = unique_resource("testnet4-tor-state")
+def test_chipnet_uses_internal_subdirectory():
+    project = unique_project("chipnet")
+    volume = unique_resource("chipnet-volume")
+    tor_volume = unique_resource("chipnet-tor-state")
     port = free_port()
-    with tempfile.TemporaryDirectory(prefix="bchforge-testnet4-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="bchforge-chipnet-") as temp_dir:
         override = write_volume_override(temp_dir, volume, tor_volume)
         main_env = compose_env(port)
         main_args = compose_args(project, override)
-        testnet_env = compose_env(port, testnet=True)
-        testnet_args = compose_args(project, override, testnet=True)
+        chipnet_env = compose_env(port, chipnet=True)
+        chipnet_args = compose_args(project, override, chipnet=True)
         try:
             compose_run(main_args, ["up", "-d", "--no-build"], env=main_env, timeout=180)
             wait_for_running(main_args, env=main_env)
             write_sentinel(volume, ".v011-mainnet", "mainnet")
+            write_sentinel(volume, "testnet4/.legacy-data", "testnet4")
             compose_run(main_args, ["down", "--remove-orphans"], env=main_env)
 
-            compose_run(testnet_args, ["up", "-d", "--no-build"], env=testnet_env, timeout=180)
-            cid = wait_for_running(testnet_args, env=testnet_env)
+            compose_run(chipnet_args, ["up", "-d", "--no-build"], env=chipnet_env, timeout=180)
+            cid = wait_for_running(chipnet_args, env=chipnet_env)
             logs = run(["docker", "logs", cid])
-            assert "Network: testnet4" in logs.stdout + logs.stderr
+            assert "Network: chipnet" in logs.stdout + logs.stderr
             top = run(["docker", "top", cid, "-eo", "user,pid,ppid,args"])
-            assert "--testnet4" in top.stdout
+            assert "--chipnet" in top.stdout
             assert_sentinel(volume, ".v011-mainnet", "mainnet")
-            write_sentinel(volume, "testnet4/.v011-testnet4", "testnet4")
-            assert_sentinel(volume, "testnet4/.v011-testnet4", "testnet4")
+            assert_sentinel(volume, "testnet4/.legacy-data", "testnet4")
+            write_sentinel(volume, "chipnet/.v04-chipnet", "chipnet")
+            assert_sentinel(volume, "chipnet/.v04-chipnet", "chipnet")
+            compose_run(chipnet_args, ["restart", "electron-cash"], env=chipnet_env)
+            wait_for_running(chipnet_args, env=chipnet_env)
+            assert_sentinel(volume, "chipnet/.v04-chipnet", "chipnet")
             assert_sentinel(volume, ".v011-mainnet", "mainnet")
         finally:
-            command = [*testnet_args, "down", "--remove-orphans"]
-            record_cleanup_result(run(command, env=testnet_env, timeout=120), command)
+            command = [*chipnet_args, "down", "--remove-orphans"]
+            record_cleanup_result(run(command, env=chipnet_env, timeout=120), command)
             remove_volume(volume)
             remove_volume(tor_volume)
             remove_gateway_volumes(project)
+
+
+def test_legacy_testnet4_selector_rejected_before_volume_mutation():
+    volume = unique_resource("obsolete-testnet4-selector")
+    create_volume(volume)
+    try:
+        result = run(
+            [
+                "docker", "run", "--pull=never", "--rm", "--network", "none",
+                "-e", "USE_TOR=false", "-e", "CASHFUSION_ENABLED=false",
+                "-e", "CHIPNET=false", "-e", "TESTNET4=true",
+                "--mount", f"type=volume,src={volume},dst=/home/electroncash/.electron-cash", IMAGE,
+            ]
+        )
+        assert result.returncode != 0
+        assert "use NETWORK=<network>" in result.stdout + result.stderr
+        volume_shell(volume, "test ! -e /data/.electron-cash-docker")
+        empty = run([
+            "docker", "run", "--pull=never", "--rm", "--network", "none",
+            "-e", "USE_TOR=false", "-e", "NETWORK=",
+            "--mount", f"type=volume,src={volume},dst=/home/electroncash/.electron-cash", IMAGE,
+        ])
+        assert empty.returncode != 0
+        assert "invalid NETWORK" in empty.stdout + empty.stderr
+        volume_shell(volume, "test ! -e /data/.electron-cash-docker")
+    finally:
+        remove_volume(volume)
 
 
 def test_unmarked_nonempty_volume_rejected():
@@ -398,8 +432,9 @@ def main():
     test_symlink_rejected()
     test_incompatible_owner_rejected_without_repair()
     test_compose_managed_persistence()
-    test_testnet4_uses_internal_subdirectory()
-    print("PASS persistence, testnet4 subdirectory, and fail-closed volume checks")
+    test_chipnet_uses_internal_subdirectory()
+    test_legacy_testnet4_selector_rejected_before_volume_mutation()
+    print("PASS persistence, Chipnet subdirectory, legacy selector rejection, and fail-closed volume checks")
 
 
 if __name__ == "__main__":

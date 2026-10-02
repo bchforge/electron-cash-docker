@@ -48,34 +48,53 @@ COMPOSE_ENV=$(docker compose --project-directory "$PROJECT_DIR" config --environ
     fail "Compose environment is unavailable."
 IMAGE=${IMAGE:-}
 EC_VERSION=${EC_VERSION:-}
-TESTNET4=${TESTNET4:-}
 ECD_WALLET_VOLUME=${ECD_WALLET_VOLUME:-}
 while IFS= read -r line; do
     case "$line" in
         ELECTRON_CASH_IMAGE=*) [ -n "$IMAGE" ] || IMAGE=${line#ELECTRON_CASH_IMAGE=} ;;
         EC_VERSION=*) [ -n "$EC_VERSION" ] || EC_VERSION=${line#EC_VERSION=} ;;
-        TESTNET4=*) [ -n "$TESTNET4" ] || TESTNET4=${line#TESTNET4=} ;;
         ECD_WALLET_VOLUME=*) [ -n "$ECD_WALLET_VOLUME" ] || ECD_WALLET_VOLUME=${line#ECD_WALLET_VOLUME=} ;;
     esac
 done <<EOF
 $COMPOSE_ENV
 EOF
 EC_VERSION=${EC_VERSION:-4.4.6}
-TESTNET4=${TESTNET4:-false}
 ECD_WALLET_VOLUME=${ECD_WALLET_VOLUME:-bchforge-electron-cash-data}
 IMAGE=${IMAGE:-electron-cash:$EC_VERSION}
 
 case "$ECD_WALLET_VOLUME" in
     ''|*[!A-Za-z0-9_.-]*) fail "Compose selected an unsafe wallet volume name." ;;
 esac
-case "$TESTNET4" in
-    true) BACKUP_NETWORK=testnet4 ;;
-    false) BACKUP_NETWORK=mainnet ;;
-    *) fail "Compose selected an invalid Electron Cash network." ;;
-esac
 [ -n "$IMAGE" ] || fail "Compose did not provide an Electron Cash image."
 docker volume inspect "$ECD_WALLET_VOLUME" >/dev/null 2>&1 || \
     fail "The configured Electron Cash wallet volume does not exist. Start the stack first."
+
+COMPOSE_MODEL=$(docker compose --project-directory "$PROJECT_DIR" config --format json) || \
+    fail "The resolved Compose service model is unavailable."
+BACKUP_NETWORK=$(printf '%s\n' "$COMPOSE_MODEL" | docker run --pull=never --rm -i \
+    --network none --read-only --cap-drop=ALL \
+    --security-opt no-new-privileges:true --user 10001:10001 \
+    -e PYTHONDONTWRITEBYTECODE=1 \
+    --entrypoint /opt/electroncash-venv/bin/python "$IMAGE" \
+    /home/electroncash/network_selection.py --compose) || \
+    fail "The resolved Compose network selection is invalid or unsupported."
+[ -n "$BACKUP_NETWORK" ] || fail "The resolved Compose network selection is unsupported."
+unset COMPOSE_MODEL
+ACTIVE_CONTAINER=$(docker compose --project-directory "$PROJECT_DIR" ps -q --status running electron-cash) || \
+    fail "Unable to inspect the running Electron Cash network."
+if [ -n "$ACTIVE_CONTAINER" ]; then
+    ACTIVE_ENV=$(docker inspect --format '{{json .Config.Env}}' "$ACTIVE_CONTAINER") || \
+        fail "Unable to inspect the running Electron Cash configuration."
+    ACTIVE_NETWORK=$(printf '%s\n' "$ACTIVE_ENV" | docker run --pull=never --rm -i \
+        --network none --read-only --cap-drop=ALL \
+        --security-opt no-new-privileges:true --user 10001:10001 \
+        -e PYTHONDONTWRITEBYTECODE=1 \
+        --entrypoint /opt/electroncash-venv/bin/python "$IMAGE" \
+        /home/electroncash/network_selection.py --env-json) || \
+        fail "The running Electron Cash network selection is invalid."
+    [ "$ACTIVE_NETWORK" = "$BACKUP_NETWORK" ] || \
+        fail "Running Electron Cash network $ACTIVE_NETWORK does not match resolved Compose network $BACKUP_NETWORK."
+fi
 
 PROJECT_NAME=$(basename "$PROJECT_DIR")
 PROJECT_ID=$(printf '%s' "$PROJECT_NAME" | tr -c 'A-Za-z0-9._-' '-')
@@ -92,6 +111,7 @@ ROLLBACK_VOLUME=
 PASSPHRASE=
 ROLLBACK_MANAGED_LABEL=com.bchforge.electron-cash-docker.managed
 ROLLBACK_PROJECT_LABEL=com.bchforge.electron-cash-docker.project
+TEST_OWNER_LABEL=com.bchforge.electron-cash-docker.test-owner
 
 is_running() {
     RUNNING_CONTAINER=$(docker compose --project-directory "$PROJECT_DIR" ps -q --status running electron-cash 2>/dev/null || true)
@@ -161,6 +181,10 @@ helper_security() {
         "--cap-drop=ALL" "--cap-add=DAC_OVERRIDE" "--cap-add=CHOWN" \
         "--cap-add=FOWNER" "--security-opt" "no-new-privileges:true" \
         "--user" "0:0" "--tmpfs" "/tmp:rw,noexec,nosuid,size=256m"
+    if [ -n "${ECD_TEST_RESOURCE_OWNER:-}" ]; then
+        case "$ECD_TEST_RESOURCE_OWNER" in ''|*[!A-Za-z0-9._-]*) fail "Test resource owner token is invalid." ;; esac
+        printf '%s\n' "--label" "$TEST_OWNER_LABEL=$ECD_TEST_RESOURCE_OWNER"
+    fi
 }
 
 run_create() {
@@ -279,9 +303,16 @@ read_pending() {
 validate_rollback_volume() {
     [ -n "$ROLLBACK_VOLUME" ] || fail "Restore rollback volume is missing."
     [ "$ROLLBACK_VOLUME" != "$ECD_WALLET_VOLUME" ] || fail "Restore rollback volume matches the live wallet."
-    labels=$(docker volume inspect --format '{{index .Labels "com.bchforge.electron-cash-docker.managed"}}|{{index .Labels "com.bchforge.electron-cash-docker.project"}}' "$ROLLBACK_VOLUME" 2>/dev/null) || \
+    labels=$(docker volume inspect --format '{{index .Labels "com.bchforge.electron-cash-docker.managed"}}|{{index .Labels "com.bchforge.electron-cash-docker.project"}}|{{index .Labels "com.bchforge.electron-cash-docker.test-owner"}}' "$ROLLBACK_VOLUME" 2>/dev/null) || \
         fail "Restore rollback volume is unavailable."
-    [ "$labels" = "rollback|$PROJECT_ID" ] || fail "Restore rollback volume is not owned by this installation."
+    case "$labels" in
+        "rollback|$PROJECT_ID|"*) ;;
+        *) fail "Restore rollback volume is not owned by this installation." ;;
+    esac
+    if [ -n "${ECD_TEST_RESOURCE_OWNER:-}" ]; then
+        [ "$labels" = "rollback|$PROJECT_ID|$ECD_TEST_RESOURCE_OWNER" ] || \
+            fail "Restore rollback volume does not match this test-run owner token."
+    fi
 }
 
 validate_state_dir() {
@@ -299,6 +330,7 @@ validate_state_dir() {
 
 remove_rollback_volume() {
     [ -n "$ROLLBACK_VOLUME" ] || return 0
+    validate_rollback_volume || return 1
     docker volume rm "$ROLLBACK_VOLUME" >/dev/null
     ROLLBACK_VOLUME=
 }
@@ -460,10 +492,19 @@ if is_running; then
 fi
 stop_service || fail "Could not stop Electron Cash before restore."
 ensure_volume_unused || fail "Could not safely detach the wallet volume before restore."
-    ROLLBACK_VOLUME=$(docker volume create \
-     --label "$ROLLBACK_MANAGED_LABEL=rollback" \
-     --label "$ROLLBACK_PROJECT_LABEL=$PROJECT_ID") || \
-     fail "Could not create the temporary rollback snapshot."
+    if [ -n "${ECD_TEST_RESOURCE_OWNER:-}" ]; then
+        case "$ECD_TEST_RESOURCE_OWNER" in ''|*[!A-Za-z0-9._-]*) fail "Test resource owner token is invalid." ;; esac
+        ROLLBACK_VOLUME=$(docker volume create \
+            --label "$ROLLBACK_MANAGED_LABEL=rollback" \
+            --label "$ROLLBACK_PROJECT_LABEL=$PROJECT_ID" \
+            --label "$TEST_OWNER_LABEL=$ECD_TEST_RESOURCE_OWNER") || \
+            fail "Could not create the temporary rollback snapshot."
+    else
+        ROLLBACK_VOLUME=$(docker volume create \
+            --label "$ROLLBACK_MANAGED_LABEL=rollback" \
+            --label "$ROLLBACK_PROJECT_LABEL=$PROJECT_ID") || \
+            fail "Could not create the temporary rollback snapshot."
+    fi
     case "$ROLLBACK_VOLUME" in ''|*[!A-Za-z0-9_.-]*) fail "Docker returned an unsafe rollback volume name." ;; esac
     validate_rollback_volume
 run_snapshot || {

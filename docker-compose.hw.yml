@@ -1,0 +1,18 @@
+# Ledger USB support requires native Linux Docker Engine and host udev access.
+services:
+  electron-cash:
+    image: ${ECD_HW_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}-hw}
+    pull_policy: never
+    build:
+      args:
+        HW_SUPPORT: "1"
+    environment:
+      HW_SUPPORT: "1"
+      HW_USB_GID: ${HW_USB_GID:?Set HW_USB_GID to the group owning the Ledger USB node}
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rw"
+  x11-authority:
+    image: ${ECD_HW_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}-hw}
+    pull_policy: never

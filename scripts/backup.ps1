@@ -44,11 +44,38 @@ foreach ($line in $composeEnvironment) {
 }
 $image = if ($env:IMAGE) { $env:IMAGE } elseif ($composeValues["ELECTRON_CASH_IMAGE"]) { $composeValues["ELECTRON_CASH_IMAGE"] } else { $null }
 $ecVersion = if ($env:EC_VERSION) { $env:EC_VERSION } elseif ($composeValues["EC_VERSION"]) { $composeValues["EC_VERSION"] } else { "4.4.6" }
-$testnet4 = if ($env:TESTNET4) { $env:TESTNET4 } elseif ($composeValues["TESTNET4"]) { $composeValues["TESTNET4"] } else { "false" }
 $walletVolume = if ($env:ECD_WALLET_VOLUME) { $env:ECD_WALLET_VOLUME } elseif ($composeValues["ECD_WALLET_VOLUME"]) { $composeValues["ECD_WALLET_VOLUME"] } else { "bchforge-electron-cash-data" }
 $image = if ($image) { $image } else { "electron-cash:$ecVersion" }
 if ($walletVolume -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') { Fail "Compose selected an unsafe wallet volume name." }
-if ($testnet4 -eq "true") { $backupNetwork = "testnet4" } elseif ($testnet4 -eq "false") { $backupNetwork = "mainnet" } else { Fail "Compose selected an invalid Electron Cash network." }
+$composeJson = & docker compose --project-directory $projectDir config --format json
+if ($LASTEXITCODE -ne 0) { Fail "The resolved Compose service model is unavailable." }
+$backupNetwork = ($composeJson -join "`n") | & docker run --pull=never --rm -i `
+    --network none --read-only --cap-drop=ALL `
+    --security-opt no-new-privileges:true --user 10001:10001 `
+    -e PYTHONDONTWRITEBYTECODE=1 `
+    --entrypoint /opt/electroncash-venv/bin/python $image `
+    /home/electroncash/network_selection.py --compose
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($backupNetwork)) {
+    Fail "The resolved Compose network selection is invalid or unsupported."
+}
+$activeContainer = (& docker compose --project-directory $projectDir ps -q --status running electron-cash).Trim()
+if ($LASTEXITCODE -ne 0) { Fail "Unable to inspect the running Electron Cash network." }
+if ($activeContainer) {
+    $activeEnvironment = & docker inspect --format '{{json .Config.Env}}' $activeContainer
+    if ($LASTEXITCODE -ne 0) { Fail "Unable to inspect the running Electron Cash configuration." }
+    $activeNetwork = ($activeEnvironment -join "`n") | & docker run --pull=never --rm -i `
+        --network none --read-only --cap-drop=ALL `
+        --security-opt no-new-privileges:true --user 10001:10001 `
+        -e PYTHONDONTWRITEBYTECODE=1 `
+        --entrypoint /opt/electroncash-venv/bin/python $image `
+        /home/electroncash/network_selection.py --env-json
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($activeNetwork)) {
+        Fail "The running Electron Cash network selection is invalid."
+    }
+    if ($activeNetwork -cne $backupNetwork) {
+        Fail "Running Electron Cash network $activeNetwork does not match resolved Compose network $backupNetwork."
+    }
+}
 & docker volume inspect $walletVolume *> $null
 if ($LASTEXITCODE -ne 0) { Fail "The configured Electron Cash wallet volume does not exist. Start the stack first." }
 
@@ -249,6 +276,7 @@ function Assert-RollbackVolume([string]$Volume) {
 
 function Remove-Rollback {
     if (-not $script:rollbackVolume) { return }
+    Assert-RollbackVolume $script:rollbackVolume
     & docker volume rm $script:rollbackVolume *> $null
     if ($LASTEXITCODE -ne 0) { throw "Temporary rollback cleanup failed." }
     $script:rollbackVolume = ""

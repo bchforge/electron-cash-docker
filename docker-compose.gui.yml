@@ -1,0 +1,73 @@
+services:
+  auth-session:
+    profiles: [remote-only]
+  caddy:
+    profiles: [remote-only]
+  fail2ban:
+    profiles: [remote-only]
+  x11-authority:
+    image: ${ELECTRON_CASH_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}}
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["/usr/bin/python3", "/home/electroncash/prepare-xauthority.py"]
+    restart: "on-failure:5"
+    stop_grace_period: 5s
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    environment:
+      DISPLAY: ${DISPLAY:?Set DISPLAY to a local X11/XWayland display for native GUI}
+      XAUTHORITY_SOURCE: /run/host-x11-authority
+      X11_SOCKET_DIR: /tmp/.X11-unix
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${XAUTHORITY:-${HOME}/.Xauthority}
+        target: /run/host-x11-authority
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${X11_SOCKET_DIR:-/tmp/.X11-unix}
+        target: /tmp/.X11-unix
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./docker/prepare-xauthority.py
+        target: /home/electroncash/prepare-xauthority.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - x11-authority:/run/ecd-x11
+    healthcheck:
+      test: ["CMD", "/usr/bin/python3", "/home/electroncash/prepare-xauthority.py", "--check"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 2s
+  electron-cash:
+    environment:
+      MODE: gui
+      ECD_GUI_OVERLAY: "true"
+      DISPLAY: ${DISPLAY:?Set DISPLAY to the host X11 display for native GUI}
+      XAUTHORITY: /run/ecd-x11/authority
+    volumes:
+      - x11-authority:/run/ecd-x11:ro
+      - type: bind
+        source: ${X11_SOCKET_DIR:-/tmp/.X11-unix}
+        target: /tmp/.X11-unix
+        read_only: true
+        bind:
+          create_host_path: false
+    ports: !reset []
+    expose: !reset []
+    depends_on:
+      x11-authority:
+        condition: service_healthy
+
+volumes:
+  x11-authority:

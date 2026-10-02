@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from test_support import unique_resource
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,11 +90,11 @@ def write_state(state: str, config: str, proxy_ip: str) -> None:
 
 def main() -> None:
     suffix = uuid.uuid4().hex[:12]
-    network = f"ecd-proxy-ban-network-{suffix}"
-    state = f"ecd-proxy-ban-state-{suffix}"
-    logs = f"ecd-proxy-ban-logs-{suffix}"
-    control = f"ecd-proxy-ban-control-{suffix}"
-    f2b_state = f"ecd-proxy-ban-f2b-{suffix}"
+    network = unique_resource("proxy-ban-network", kind="network")
+    state = unique_resource("proxy-ban-state")
+    logs = unique_resource("proxy-ban-logs")
+    control = unique_resource("proxy-ban-control")
+    f2b_state = unique_resource("proxy-ban-f2b")
     caddy = f"ecd-proxy-ban-caddy-{suffix}"
     proxy = f"ecd-proxy-ban-proxy-{suffix}"
     direct = f"ecd-proxy-ban-direct-{suffix}"
