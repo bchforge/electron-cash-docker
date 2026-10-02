@@ -5,6 +5,7 @@ set -euo pipefail
 SOURCE=${SOURCE:-/wallet}
 BACKUP_NETWORK=${BACKUP_NETWORK:-mainnet}
 EC_VERSION=${EC_VERSION:-4.4.6}
+/opt/electroncash-venv/bin/python /home/electroncash/network_selection.py --validate "${BACKUP_NETWORK}" || exit 1
 GPG_HOME=$(mktemp -d /tmp/ecd-gpg.XXXXXX)
 trap 'rm -rf "${GPG_HOME}"' EXIT
 chmod 700 "${GPG_HOME}"

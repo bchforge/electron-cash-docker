@@ -3,7 +3,6 @@
 set -euo pipefail
 
 export HOME=/home/electroncash
-export DISPLAY=:99
 export XDG_RUNTIME_DIR=/tmp/runtime-electroncash
 
 MODE=${MODE:-novnc}
@@ -19,7 +18,6 @@ if [[ ! "${ECD_PRODUCT_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
 fi
 USE_TOR=${USE_TOR:?USE_TOR must be set}
 CASHFUSION_ENABLED=${CASHFUSION_ENABLED:-true}
-TESTNET4=${TESTNET4:-false}
 WALLET_AUTO_CREATE=${WALLET_AUTO_CREATE:-false}
 TEST_WALLET_PASSWORD=${TEST_WALLET_PASSWORD:-}
 ELECTRONCASH_RUNTIME=${ELECTRONCASH_RUNTIME:-false}
@@ -28,10 +26,40 @@ JSONRPC_USER=${JSONRPC_USER:-}
 JSONRPC_PASSWORD=${JSONRPC_PASSWORD:-}
 JSONRPC_PORT=${JSONRPC_PORT:-50001}
 
+if ! NETWORK_DETAILS=$(/opt/electroncash-venv/bin/python /home/electroncash/network_selection.py --details); then
+    exit 1
+fi
+read -r NETWORK_LABEL NETWORK_FLAG CONFIG_DIR <<< "${NETWORK_DETAILS}"
+EC_NET_FLAG=()
+if [ "${NETWORK_FLAG}" != - ]; then EC_NET_FLAG=("${NETWORK_FLAG}"); fi
+mapfile -d '' -t EC_EXTRA_ARGS < <(/opt/electroncash-venv/bin/python /home/electroncash/network_selection.py --args)
+
 case "${MODE}" in
-    novnc|headless) ;;
-    *) echo "[!] MODE must be novnc or headless"; exit 1 ;;
+    novnc|headless|gui) ;;
+    *) echo "[!] MODE must be novnc, headless or gui"; exit 1 ;;
 esac
+if [ "${ECD_HEADLESS_OVERLAY:-false}" = true ] && [ "${ECD_GUI_OVERLAY:-false}" = true ]; then
+    echo "[!] headless and native GUI overlays cannot be combined"; exit 1
+fi
+if [ "${JSONRPC_ENABLED:-false}" = true ]; then
+    if [ "${ECD_RPC_OVERLAY:-false}" != true ] || [ "${ECD_HEADLESS_OVERLAY:-false}" != true ] || \
+        [ "${ECD_GUI_OVERLAY:-false}" = true ]; then
+        echo "[!] JSON-RPC requires the headless and RPC overlays and cannot be combined with native GUI"; exit 1
+    fi
+fi
+if [ "${HW_SUPPORT:-0}" = 1 ] && [ "${ECD_GUI_OVERLAY:-false}" != true ]; then
+    echo "[!] Ledger requires the native GUI overlay on Linux"; exit 1
+fi
+if [ "${MODE}" = gui ]; then
+    if [ -z "${DISPLAY:-}" ] || [ "${DISPLAY}" = :99 ]; then
+        echo "[!] native GUI requires a host DISPLAY (not :99)"; exit 1
+    fi
+    if ! xdpyinfo -display "${DISPLAY}" >/dev/null 2>&1; then
+        echo "[!] host X11 display is unavailable: ${DISPLAY}"; exit 1
+    fi
+else
+    export DISPLAY=:99
+fi
 
 case "${USE_TOR}" in
     true|false) ;;
@@ -104,30 +132,13 @@ fi
 readonly WALLET_ROOT=/home/electroncash/.electron-cash
 readonly WALLET_MARKER=${WALLET_ROOT}/.electron-cash-docker
 readonly EXPECTED_MARKER=electron-cash-docker-v0.1
-
-case "${TESTNET4}" in
-    true)
-        EC_NET_FLAG="--testnet4"
-        NETWORK_LABEL=testnet4
-        CONFIG_DIR="${WALLET_ROOT}/testnet4"
-        ;;
-    false)
-        EC_NET_FLAG=""
-        NETWORK_LABEL=mainnet
-        CONFIG_DIR="${WALLET_ROOT}"
-        ;;
-    *)
-        echo "[!] TESTNET4 must be true or false"
-        exit 1
-        ;;
-esac
 CONFIG_FILE="${CONFIG_DIR}/config"
 WALLET_FILE="${CONFIG_DIR}/wallets/default_wallet"
 
-if [ "${TESTNET4}" != "true" ] && {
+if [ "${NETWORK_LABEL}" != "chipnet" ] && {
     [ "${WALLET_AUTO_CREATE}" = "true" ] || [ -n "${TEST_WALLET_PASSWORD}" ];
 }; then
-    echo "[!] WALLET_AUTO_CREATE and TEST_WALLET_PASSWORD are testnet4-only"
+    echo "[!] WALLET_AUTO_CREATE and TEST_WALLET_PASSWORD require NETWORK=chipnet"
     exit 1
 fi
 
@@ -257,9 +268,17 @@ initialize_wallet_root() {
 
 if [ "$(id -u)" -eq 0 ] && [ "${ELECTRONCASH_RUNTIME}" != "true" ]; then
     initialize_wallet_root
-    exec setpriv --reuid 10001 --regid 10001 --clear-groups -- \
+    runtime_groups=(--clear-groups)
+    if [ "${HW_SUPPORT:-0}" = 1 ]; then
+        [ -d /dev/bus/usb ] || { echo "[!] Ledger USB devices are unavailable"; exit 1; }
+        case "${HW_USB_GID:-}" in
+            ''|*[!0-9]*) echo "[!] HW_USB_GID must be the numeric group of the Ledger USB node"; exit 1 ;;
+        esac
+        runtime_groups=(--groups "${HW_USB_GID:?HW_USB_GID must identify the Linux USB device group}")
+    fi
+    exec setpriv --reuid 10001 --regid 10001 "${runtime_groups[@]}" -- \
         env ELECTRONCASH_RUNTIME=true HOME=/home/electroncash \
-        DISPLAY=:99 XDG_RUNTIME_DIR=/tmp/runtime-electroncash "$0" "$@"
+        XDG_RUNTIME_DIR=/tmp/runtime-electroncash "$0" "$@"
 fi
 
 if [ "$(id -u)" -ne 10001 ] || [ "$(id -g)" -ne 10001 ]; then
@@ -594,31 +613,29 @@ ensure_test_wallet() {
         local cli=(/opt/electroncash-venv/bin/python /opt/electroncash-venv/bin/electron-cash)
         local create_args
         if [ -n "${TEST_WALLET_PASSWORD}" ]; then
-            echo "[*] Creating encrypted testnet4 wallet"
+            echo "[*] Creating encrypted Chipnet wallet"
             create_args=(create -W "${TEST_WALLET_PASSWORD}" --encrypt_file)
         else
-            echo "[*] Creating unencrypted testnet4 wallet"
+            echo "[*] Creating unencrypted Chipnet wallet"
             create_args=(create -W "")
         fi
-        if [ -n "${EC_NET_FLAG}" ]; then
-            create_args+=("${EC_NET_FLAG}")
-        fi
+        create_args+=("${EC_NET_FLAG[@]}")
         create_args+=(--wallet_path "${WALLET_FILE}")
         if [ -n "${TEST_WALLET_PASSWORD}" ]; then
             if ! printf '%s\n%s\n' "${TEST_WALLET_PASSWORD}" "${TEST_WALLET_PASSWORD}" \
                 | "${cli[@]}" "${create_args[@]}" >/dev/null 2>&1; then
-                echo "[!] Failed to create encrypted testnet4 wallet"
+                echo "[!] Failed to create encrypted Chipnet wallet"
                 return 1
             fi
         else
             if ! printf '\n' | "${cli[@]}" "${create_args[@]}" >/dev/null 2>&1; then
-                echo "[!] Failed to create testnet4 wallet"
+                echo "[!] Failed to create Chipnet wallet"
                 return 1
             fi
         fi
-        echo "[+] Testnet4 wallet created (seed suppressed from logs)"
+        echo "[+] Chipnet wallet created (seed suppressed from logs)"
     else
-        echo "[+] Testnet4 wallet found"
+        echo "[+] Chipnet wallet found"
     fi
 
     CONFIG_FILE="${CONFIG_FILE}" WALLET_FILE="${WALLET_FILE}" python3 - <<'PY'
@@ -649,20 +666,16 @@ PY
 start_headless() {
     echo "[*] Starting Electron Cash daemon without the GUI stack"
     local command=(/opt/electroncash-venv/bin/python /home/electroncash/electroncash-daemon-wrapper.py)
-    if [ -n "${EC_NET_FLAG}" ]; then
-        command+=("${EC_NET_FLAG}")
-    fi
+    command+=("${EC_NET_FLAG[@]}")
     if [ -f "${WALLET_FILE}" ]; then
         command+=(--wallet "${WALLET_FILE}")
     fi
-    command+=(daemon --verbose)
+    command+=("${EC_EXTRA_ARGS[@]}" daemon --verbose)
     env CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" "${command[@]}" &
     ELECTRONCASH_PID=$!
 
     local cli=(/opt/electroncash-venv/bin/electron-cash)
-    if [ -n "${EC_NET_FLAG}" ]; then
-        cli+=("${EC_NET_FLAG}")
-    fi
+    cli+=("${EC_NET_FLAG[@]}")
     local attempts=0
     while ! "${cli[@]}" daemon status >/dev/null 2>&1; do
         attempts=$((attempts + 1))
@@ -727,11 +740,17 @@ start_novnc() {
     wait_for_port localhost 6080 "noVNC" || return 1
 
     local command=(/opt/electroncash-venv/bin/python /home/electroncash/electroncash-wrapper.py)
-    if [ -n "${EC_NET_FLAG}" ]; then
-        command+=("${EC_NET_FLAG}")
-    fi
-    command+=(--verbose)
+    command+=("${EC_NET_FLAG[@]}")
+    command+=("${EC_EXTRA_ARGS[@]}" --verbose)
     env CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" DISPLAY=:99 "${command[@]}" &
+    ELECTRONCASH_PID=$!
+}
+
+start_gui() {
+    echo "[*] Starting ${ECD_PRODUCT_VERSION} on host X11 display ${DISPLAY}"
+    local command=(/opt/electroncash-venv/bin/python /home/electroncash/electroncash-wrapper.py)
+    command+=("${EC_NET_FLAG[@]}" "${EC_EXTRA_ARGS[@]}" --verbose)
+    env CASHFUSION_ENABLED="${CASHFUSION_ENABLED}" "${command[@]}" &
     ELECTRONCASH_PID=$!
 }
 
@@ -762,6 +781,7 @@ preload_plugins
 case "${MODE}" in
     novnc) start_novnc ;;
     headless) start_headless ;;
+    gui) start_gui ;;
 esac
 
 wait "${ELECTRONCASH_PID}"

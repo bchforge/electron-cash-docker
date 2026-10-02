@@ -788,7 +788,7 @@ print("RESULT=" + json.dumps({"observed": observed, "result": result}))
         output = docker_python(
             volume,
             code,
-            env={"TESTNET4": "true", "TEST_WALLET_PASSWORD": PASSWORD},
+            env={"NETWORK": "chipnet", "TEST_WALLET_PASSWORD": PASSWORD},
         )
     result_line = next(line for line in output.splitlines() if line.startswith("RESULT="))
     result = json.loads(result_line.removeprefix("RESULT="))
@@ -812,7 +812,8 @@ def test_mainnet_rejects_test_password():
         ]
     )
     assert result.returncode == 1
-    assert "testnet4-only" in result.stdout
+    output = result.stdout + result.stderr
+    assert "require NETWORK=chipnet" in output, output
 
 
 def main():

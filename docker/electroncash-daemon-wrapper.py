@@ -8,6 +8,8 @@ import signal
 import sys
 from functools import wraps
 
+from network_selection import NetworkSelectionError, effective_network
+
 
 APP_PATH = "/opt/electroncash-venv/bin/electron-cash"
 
@@ -20,8 +22,12 @@ def install_test_wallet_password():
     password = os.environ.get("TEST_WALLET_PASSWORD", "")
     if not password:
         return
-    if os.environ.get("TESTNET4", "false") != "true":
-        raise RuntimeError("TEST_WALLET_PASSWORD is testnet4-only")
+    try:
+        network = effective_network()
+    except NetworkSelectionError as error:
+        raise RuntimeError(str(error)) from error
+    if network != "chipnet":
+        raise RuntimeError("TEST_WALLET_PASSWORD requires NETWORK=chipnet")
 
     from electroncash.daemon import Daemon
 
@@ -72,6 +78,11 @@ def install_cashfusion_defaults():
 
 
 def main():
+    try:
+        effective_network()
+    except NetworkSelectionError as error:
+        print(f"[!] {error}", file=sys.stderr)
+        raise SystemExit(1) from error
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     install_test_wallet_password()

@@ -10,7 +10,9 @@ services:
         NOVNC_VERSION: ${NOVNC_VERSION:?NOVNC_VERSION must be set in .env}
         NOVNC_COMMIT: ${NOVNC_COMMIT:?NOVNC_COMMIT must be set in .env}
         NOVNC_ARCHIVE_SHA256: ${NOVNC_ARCHIVE_SHA256:?NOVNC_ARCHIVE_SHA256 must be set in .env}
+        HW_SUPPORT: "0"
     image: ${ELECTRON_CASH_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}}
+    pull_policy: never
     restart: "on-failure:5"
     stop_grace_period: 15s
     expose:
@@ -18,7 +20,10 @@ services:
     environment:
       MODE: ${MODE:-novnc}
       USE_TOR: ${USE_TOR:?USE_TOR must be set in .env}
+      NETWORK: ${NETWORK-mainnet}
+      CHIPNET: ${CHIPNET:-false}
       TESTNET4: ${TESTNET4:-false}
+      ELECTRONCASH_ARGS: ${ELECTRONCASH_ARGS:-}
       CASHFUSION_ENABLED: ${CASHFUSION_ENABLED:-true}
       CASHFUSION_AUTO_FUSE: ${CASHFUSION_AUTO_FUSE:-false}
       CASHFUSION_FUSION_MODE: ${CASHFUSION_FUSION_MODE:-custom}
@@ -55,6 +60,7 @@ services:
       context: .
       dockerfile: docker/auth-session/Dockerfile
     image: ${AUTH_SESSION_IMAGE:-electron-cash-docker-auth-session:0.3}
+    pull_policy: never
     restart: on-failure:5
     read_only: true
     cap_drop: [ALL]
@@ -80,7 +86,10 @@ services:
     build:
       context: ./docker/caddy
       dockerfile: Dockerfile
+      entitlements:
+        - network.host
     image: ${CADDY_IMAGE:-electron-cash-docker-caddy:0.3}
+    pull_policy: never
     restart: on-failure:5
     entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
     depends_on:
@@ -123,6 +132,7 @@ services:
       context: ./docker/fail2ban
       dockerfile: Dockerfile
     image: ${FAIL2BAN_IMAGE:-electron-cash-docker-fail2ban:0.3}
+    pull_policy: never
     restart: on-failure:5
     depends_on:
       caddy:
@@ -162,6 +172,7 @@ services:
         TOR_VERSION: ${TOR_VERSION:?TOR_VERSION must be set in .env}
         TOR_SOURCE_SHA256: ${TOR_SOURCE_SHA256:?TOR_SOURCE_SHA256 must be set in .env}
     image: ${TOR_IMAGE:-bchforge/electron-cash-docker-tor:${TOR_VERSION:?TOR_VERSION must be set in .env}}
+    pull_policy: never
     restart: on-failure
     stop_grace_period: 10s
     read_only: true

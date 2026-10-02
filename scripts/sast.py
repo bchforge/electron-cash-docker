@@ -64,9 +64,14 @@ def bootstrap_bandit() -> Path:
     if marker.is_file():
         return target
 
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        raise SastError("Bandit tool directory is a symbolic link; refusing to replace it")
     if target.exists():
-        shutil.rmtree(target)
+        raise SastError(
+            f"Bandit tool directory exists but is incomplete: {target}; "
+            "it was retained unchanged"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f"bandit-{BANDIT_VERSION}-", dir=target.parent))
     command = [
         sys.executable,

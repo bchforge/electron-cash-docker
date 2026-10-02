@@ -62,6 +62,9 @@ def test_integrity_metadata_contracts() -> None:
     for key in ("EC_ARCHIVE_SHA256", "NOVNC_ARCHIVE_SHA256", "TOR_SOURCE_SHA256"):
         assert re.fullmatch(r"[0-9a-f]{64}", values[key])
     novnc_dockerfile = (ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+    assert "git submodule sync -- contrib/secp256k1 && \\" in novnc_dockerfile
+    assert "git submodule update --init -- contrib/secp256k1 && \\" in novnc_dockerfile
+    assert "git submodule update --init --recursive" not in novnc_dockerfile
     assert "https://codeload.github.com/novnc/noVNC/tar.gz/${NOVNC_COMMIT}" in novnc_dockerfile
     assert "https://github.com/novnc/noVNC/archive/" not in novnc_dockerfile
     tor_dockerfile = (ROOT / "docker/tor/Dockerfile").read_text(encoding="utf-8")
@@ -76,6 +79,8 @@ def test_integrity_metadata_contracts() -> None:
     assert "FROM golang@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder" in caddy
     assert "ARG CADDY_VERSION=2.11.4" in caddy
     assert "ARG CADDY_ARCHIVE_SHA256=2c3d02078286a6282cdb4d1d8744077788d556659dac0b64d8ed5886a7e5aeb9" in caddy
+    assert "libcrypto3=3.5.9-r0" in caddy
+    assert "libssl3=3.5.9-r0" in caddy
     fail2ban = (ROOT / "docker/fail2ban/Dockerfile").read_text(encoding="utf-8")
     assert "FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90" in fail2ban
 
@@ -101,11 +106,23 @@ def test_os_package_specs_are_pinned() -> None:
                 collecting = False
 
 
+def test_v04_pin_repairs_and_ledger_source() -> None:
+    dockerfile = (ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+    tor = (ROOT / "docker/tor/Dockerfile").read_text(encoding="utf-8")
+    assert dockerfile.count("curl=8.5.0-2ubuntu10.15") == 3
+    assert "xvfb=2:21.1.12-1ubuntu1.8" in dockerfile
+    assert "curl=8.5.0-2ubuntu10.15" in tor
+    assert "34f5e0c161c08f65dc0d070ba2ff4c315ed21c4b7e0faa32a46862d0dc1b8f55" in dockerfile
+    assert "sha256sum -c -" in dockerfile
+    assert "btchip-python-0.1.32.tar.gz" in dockerfile
+
+
 def main() -> None:
     test_positive_upstream_identity()
     test_upstream_identity_matches_recorded_contract()
     test_integrity_metadata_contracts()
     test_os_package_specs_are_pinned()
+    test_v04_pin_repairs_and_ledger_source()
     print("PASS semantic upstream identity and integrity metadata checks")
 
 

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "automated_scenario_contract",
+  "capability": "linux-x11",
+  "scenarios": {
+    "display-window-and-xwd": {"required": true, "expected_window_substring": "Electron Cash", "minimum_width": 320, "minimum_height": 240},
+    "safe-close-and-restart": {"required": true, "expected_exit_code": 0, "shutdown_marker": "/tmp/electron-cash-shutdown", "persisted_marker": "retained"},
+    "missing-display": {"required": true, "expected_error": "native GUI requires a host DISPLAY"},
+    "wrong-cookie": {"required": true, "expected_error": "host X11 display is unavailable"},
+    "socket-unavailable": {"required": true, "expected_error": "host X11 display is unavailable"},
+    "tor-socks": {"required": true, "expected_socks_method": "no-auth"},
+    "state-persistence": {"required": true, "wallet_root": "/home/electroncash/.electron-cash/chipnet"},
+    "no-remote-services-or-ports": {"required": true, "forbidden_services": ["auth-session", "caddy", "fail2ban"], "forbidden_processes": ["Xvfb", "x11vnc", "websockify"]}
+  }
+}

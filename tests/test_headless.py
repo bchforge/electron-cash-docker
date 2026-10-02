@@ -59,14 +59,12 @@ def compose_base(project: str, override: Path) -> list[str]:
 
 
 def write_volume_override(
-    directory: str, volume: str, tor_volume: str, *, testnet4: bool = False
+    directory: str, volume: str, tor_volume: str
 ) -> Path:
     override = Path(directory) / "volumes.yml"
-    environment = "    environment:\n      TESTNET4: \"true\"\n" if testnet4 else ""
     override.write_text(
         "services:\n"
         "  electron-cash:\n"
-        f"{environment}"
         "    volumes:\n"
         "      - electron-cash-data:/home/electroncash/.electron-cash\n"
         "volumes:\n"
@@ -88,7 +86,7 @@ from electroncash.storage import WalletStorage
 from electroncash_plugins.fusion.conf import Conf
 
 storage = WalletStorage(
-    "/home/electroncash/.electron-cash/testnet4/wallets/default_wallet",
+    "/home/electroncash/.electron-cash/chipnet/wallets/default_wallet",
     manual_upgrades=True,
 )
 storage.decrypt(os.environ["TEST_WALLET_PASSWORD"])
@@ -131,6 +129,9 @@ def compose_environment(*, use_tor: bool = False) -> dict[str, str]:
     environment.update(
         {
             "USE_TOR": str(use_tor).lower(),
+            "CHIPNET": "false",
+            "TESTNET4": "false",
+            "NETWORK": "mainnet",
             "CASHFUSION_ENABLED": "true",
             "WALLET_AUTO_CREATE": "false",
             "TEST_WALLET_PASSWORD": "",
@@ -179,7 +180,7 @@ def wait_for_running(command: list[str], environment: dict[str, str]) -> str:
 
 
 def wait_for_daemon(
-    command: list[str], environment: dict[str, str], *, testnet4: bool = False
+    command: list[str], environment: dict[str, str], *, chipnet: bool = False
 ) -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -192,7 +193,7 @@ def wait_for_daemon(
                 "10001:10001",
                 "electron-cash",
                 CLI,
-                *(("--testnet4",) if testnet4 else ()),
+                *(("--chipnet",) if chipnet else ()),
                 "daemon",
                 "status",
             ],
@@ -318,14 +319,28 @@ def test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority() -> No
         }
     )
 
-    with tempfile.TemporaryDirectory(prefix="bchforge-headless-fusion-") as temporary:
-        override = write_volume_override(temporary, volume, tor_volume, testnet4=True)
-        compose = compose_base(project, override)
+    with tempfile.TemporaryDirectory(prefix="bchforge-headless-chipnet-fusion-") as temporary:
+        override = write_volume_override(temporary, volume, tor_volume)
+        compose = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(ENV_FILE),
+            "-p",
+            project,
+            "-f",
+            "docker-compose.yml",
+            "-f",
+            "docker-compose.headless.yml",
+            "-f",
+            str(override),
+        ]
+        environment["NETWORK"] = "chipnet"
         try:
             started = run([*compose, "up", "-d", "--no-build"], env=environment, timeout=120)
             assert started.returncode == 0, started.stdout + started.stderr
             wait_for_running(compose, environment)
-            wait_for_daemon(compose, environment, testnet4=True)
+            wait_for_daemon(compose, environment, chipnet=True)
             observed = wait_for_wallet_autofuse(
                 compose, environment, {"encrypted": True, "autofuse": True}
             )
@@ -338,7 +353,7 @@ def test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority() -> No
             )
             assert restarted.returncode == 0, restarted.stdout + restarted.stderr
             wait_for_running(compose, environment)
-            wait_for_daemon(compose, environment, testnet4=True)
+            wait_for_daemon(compose, environment, chipnet=True)
             observed = wait_for_wallet_autofuse(
                 compose, environment, {"encrypted": True, "autofuse": True}
             )
@@ -351,7 +366,7 @@ def test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority() -> No
             )
             assert restarted.returncode == 0, restarted.stdout + restarted.stderr
             wait_for_running(compose, environment)
-            wait_for_daemon(compose, environment, testnet4=True)
+            wait_for_daemon(compose, environment, chipnet=True)
             observed = wait_for_wallet_autofuse(
                 compose, environment, {"encrypted": True, "autofuse": True}
             )
@@ -366,7 +381,7 @@ def main() -> None:
     test_headless_runtime_and_port_isolation()
     test_headless_runtime_with_tor()
     test_headless_encrypted_cashfusion_toggle_preserves_wallet_authority()
-    print("PASS headless mode, daemon readiness, port isolation, and CashFusion persistence")
+    print("PASS headless mainnet/Chipnet mode, daemon readiness, port isolation, and CashFusion persistence")
 
 
 if __name__ == "__main__":

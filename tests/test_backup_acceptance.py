@@ -16,7 +16,8 @@ import time
 import uuid
 from pathlib import Path
 
-from test_support import electron_cash_image, unique_project, unique_resource
+from test_support import (docker_ownership as ownership, electron_cash_image, remove_owned_volume,
+                          resource_owner, unique_project, unique_resource)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,19 +38,31 @@ def checked(command: list[str], *, cwd: Path, input_text: str | None = None, tim
 
 
 def create_volume(name: str) -> None:
-    checked(["docker", "volume", "create", "--label", "com.bchforge.acceptance=true", name], cwd=ROOT)
+    checked(["docker", "volume", "create", "--label", "com.bchforge.acceptance=true",
+             "--label", f"{ownership.OWNER_LABEL}={resource_owner()}", name], cwd=ROOT)
 
 
 def remove_volume(name: str) -> None:
-    run(["docker", "volume", "rm", "-f", name], cwd=ROOT)
+    remove_owned_volume(name)
 
 
-def rollback_volumes() -> set[str]:
+def rollback_volumes(project_id: str) -> set[str]:
     result = run(
-        ["docker", "volume", "ls", "--filter", "label=com.bchforge.electron-cash-docker.managed=rollback", "-q"],
+        ["docker", "volume", "ls", "--filter", "label=com.bchforge.electron-cash-docker.managed=rollback",
+         "--filter", f"label=com.bchforge.electron-cash-docker.project={project_id}", "-q"],
         cwd=ROOT,
     )
-    return set(result.stdout.splitlines())
+    if result.returncode != 0:
+        raise AssertionError("cannot inspect this test project's rollback volumes")
+    names = set(result.stdout.splitlines())
+    for name in names:
+        inspected = checked(["docker", "volume", "inspect", name], cwd=ROOT)
+        labels = json.loads(inspected.stdout)[0].get("Labels") or {}
+        if (labels.get("com.bchforge.electron-cash-docker.managed") != "rollback" or
+                labels.get("com.bchforge.electron-cash-docker.project") != project_id or
+                labels.get(ownership.OWNER_LABEL) != resource_owner()):
+            raise AssertionError(f"rollback volume does not carry this test's ownership claim: {name}")
+    return names
 
 
 def initialize_volume(name: str, sentinel: str, *, healthy: bool) -> None:
@@ -73,6 +86,24 @@ def initialize_volume(name: str, sentinel: str, *, healthy: bool) -> None:
     )
 
 
+def initialize_chipnet_volume(name: str, sentinel: str) -> None:
+    command = (
+        "mkdir -p /wallet/chipnet/wallets && "
+        "printf 'electron-cash-docker-v0.1\\n' > /wallet/.electron-cash-docker && "
+        "printf '{\"auto_connect\":true}\\n' > /wallet/chipnet/config && "
+        f"printf '{sentinel}\\n' > /wallet/chipnet/wallets/default_wallet && "
+        "chown -R 10001:10001 /wallet && chmod 700 /wallet /wallet/chipnet /wallet/chipnet/wallets && "
+        "chmod 600 /wallet/.electron-cash-docker /wallet/chipnet/config /wallet/chipnet/wallets/default_wallet"
+    )
+    checked(
+        [
+            "docker", "run", "--pull=never", "--rm", "--network", "none", "--user", "0:0",
+            "--mount", f"type=volume,src={name},dst=/wallet", "--entrypoint", "/bin/bash", IMAGE, "-c", command,
+        ],
+        cwd=ROOT,
+    )
+
+
 def mutate_volume(name: str, sentinel: str, *, healthy: bool = True) -> None:
     health_command = "printf 'ok\\n' > /wallet/wallets/health-ok && " if healthy else "rm -f /wallet/wallets/health-ok && "
     checked(
@@ -86,12 +117,12 @@ def mutate_volume(name: str, sentinel: str, *, healthy: bool = True) -> None:
     )
 
 
-def wallet_value(name: str) -> str:
+def wallet_value(name: str, relative_path: str = "wallets/default_wallet") -> str:
     result = checked(
         [
             "docker", "run", "--pull=never", "--rm", "--network", "none", "--read-only",
             "--mount", f"type=volume,src={name},dst=/wallet,readonly", "--entrypoint", "/bin/bash", IMAGE,
-            "-c", "cat /wallet/wallets/default_wallet",
+            "-c", f"cat /wallet/{relative_path}",
         ],
         cwd=ROOT,
     )
@@ -119,7 +150,7 @@ def direct_create(volume: str, output: Path) -> None:
     output.chmod(0o600)
 
 
-def manifest_digest(archive: Path) -> str:
+def archive_manifest(archive: Path) -> dict:
     result = subprocess.run(
         [
             "docker", "run", "--pull=never", "--rm", "-i", "--network", "none", "--read-only",
@@ -140,7 +171,11 @@ def manifest_digest(archive: Path) -> str:
         member = payload.extractfile("manifest.json")
         if member is None:
             raise AssertionError("backup has no manifest")
-        manifest = json.loads(member.read())
+        return json.loads(member.read())
+
+
+def manifest_digest(archive: Path) -> str:
+    manifest = archive_manifest(archive)
     return hashlib.sha256((json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
 
 
@@ -154,6 +189,10 @@ def write_fixture(project: Path, volume: str) -> None:
     image: {IMAGE}
     entrypoint: [/bin/bash]
     command: [-c, 'exec sleep infinity']
+    environment:
+      NETWORK: ${{NETWORK:-mainnet}}
+      CHIPNET: ${{CHIPNET:-false}}
+      TESTNET4: ${{TESTNET4:-false}}
     healthcheck:
       test: [CMD-SHELL, 'test -f /home/electroncash/.electron-cash/wallets/health-ok']
       interval: 1s
@@ -169,13 +208,15 @@ volumes:
         encoding="utf-8",
     )
     project.joinpath(".env").write_text(
-        f"ECD_WALLET_VOLUME={volume}\nTESTNET4=false\n",
+        f"ECD_WALLET_VOLUME={volume}\nCHIPNET=false\nTESTNET4=false\n",
         encoding="utf-8",
     )
 
 
-def public_environment(project: Path, state_home: Path) -> dict[str, str]:
+def public_environment(project: Path, state_home: Path, *, chipnet: bool = False) -> dict[str, str]:
     environment = os.environ.copy()
+    for key in ("COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "COMPOSE_PROFILES"):
+        environment.pop(key, None)
     environment.update(
         {
             "BACKUP_DIR": str(project / "backups"),
@@ -183,16 +224,20 @@ def public_environment(project: Path, state_home: Path) -> dict[str, str]:
             "EC_VERSION": VERSION,
             "IMAGE": IMAGE,
             "XDG_STATE_HOME": str(state_home),
+            "CHIPNET": "false",
+            "TESTNET4": "false",
+            "NETWORK": "chipnet" if chipnet else "mainnet",
+            "ECD_TEST_RESOURCE_OWNER": resource_owner(),
         }
     )
     return environment
 
 
-def run_public(project: Path, operation: str, name: str, state_home: Path, input_text: str) -> subprocess.CompletedProcess[str]:
+def run_public(project: Path, operation: str, name: str, state_home: Path, input_text: str, *, chipnet: bool = False) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(project / "scripts/backup.sh"), operation, name],
         cwd=project,
-        env=public_environment(project, state_home),
+        env=public_environment(project, state_home, chipnet=chipnet),
         input=input_text,
         text=True,
         capture_output=True,
@@ -264,11 +309,11 @@ def service_running(project: Path) -> bool:
     return bool(run(["docker", "compose", "-p", project.name, "ps", "-q", "--status", "running", "electron-cash"], cwd=project).stdout.strip())
 
 
-def assert_no_restore_artifacts(state_home: Path, baseline: set[str]) -> None:
+def assert_no_restore_artifacts(state_home: Path, project_id: str) -> None:
     state_dir = state_home / "electron-cash-docker"
     if state_dir.exists():
         assert not list(state_dir.iterdir()), list(state_dir.iterdir())
-    assert rollback_volumes() == baseline
+    assert rollback_volumes(project_id) == set()
 
 
 def test_backup_acceptance() -> None:
@@ -276,7 +321,7 @@ def test_backup_acceptance() -> None:
     active = unique_resource("active")
     bad_source = unique_resource("bad-source")
     project: Path | None = None
-    rollback_before = rollback_volumes()
+    assert rollback_volumes(project_name) == set()
     try:
         create_volume(active)
         create_volume(bad_source)
@@ -314,7 +359,7 @@ def test_backup_acceptance() -> None:
                 wait_for_healthy(project)
                 assert hashlib.sha256(archive.read_bytes()).hexdigest() == source_digest
                 assert manifest_digest(archive) == source_manifest_digest
-                assert_no_restore_artifacts(state_home, rollback_before)
+                assert_no_restore_artifacts(state_home, project_name)
 
                 checked([*compose, "stop", "electron-cash"], cwd=project)
                 mutate_volume(active, "wallet-stopped-mutation")
@@ -324,7 +369,7 @@ def test_backup_acceptance() -> None:
                 assert not service_running(project)
                 assert hashlib.sha256(archive.read_bytes()).hexdigest() == source_digest
                 assert manifest_digest(archive) == source_manifest_digest
-                assert_no_restore_artifacts(state_home, rollback_before)
+                assert_no_restore_artifacts(state_home, project_name)
 
                 mutate_volume(active, "wallet-before-interruption", healthy=True)
                 checked([*compose, "up", "-d", "electron-cash"], cwd=project)
@@ -339,7 +384,7 @@ def test_backup_acceptance() -> None:
                 wait_for_healthy(project)
                 assert hashlib.sha256(archive.read_bytes()).hexdigest() == source_digest
                 assert manifest_digest(archive) == source_manifest_digest
-                assert_no_restore_artifacts(state_home, rollback_before)
+                assert_no_restore_artifacts(state_home, project_name)
 
                 with tempfile.TemporaryDirectory(prefix="ecd-bad-archive-") as archive_temp:
                     bad_archive = Path(archive_temp) / "bad.ecd.gpg"
@@ -362,16 +407,66 @@ def test_backup_acceptance() -> None:
                 wait_for_healthy(project)
                 assert hashlib.sha256(bad_path.read_bytes()).hexdigest() == bad_digest
                 assert manifest_digest(bad_path) == bad_manifest_digest
-                assert_no_restore_artifacts(state_home, rollback_before)
+                assert_no_restore_artifacts(state_home, project_name)
                 print("PASS running/stopped backup state, immutable source hash/manifest, sentinel restore, forced health rollback, and cleanup")
             finally:
                 run([*compose, "down", "--remove-orphans"], cwd=project, timeout=120)
     finally:
         remove_volume(active)
         remove_volume(bad_source)
-        for volume in rollback_volumes() - rollback_before:
+        for volume in rollback_volumes(project_name):
+            remove_volume(volume)
+
+
+def test_chipnet_public_backup_uses_effective_compose_network() -> None:
+    project_name = unique_project("backup-chipnet")
+    active = unique_resource("backup-chipnet-wallet")
+    assert rollback_volumes(project_name) == set()
+    try:
+        create_volume(active)
+        initialize_chipnet_volume(active, "wallet-chipnet-original")
+        with tempfile.TemporaryDirectory(prefix="ecd-chipnet-backup-public-") as temporary:
+            root = Path(temporary)
+            project = root / project_name
+            project.mkdir()
+            state_home = root / "state"
+            write_fixture(project, active)
+
+            created = run_public(
+                project,
+                "backup",
+                "chipnet-wallet",
+                state_home,
+                f"{PASSWORD}\n{PASSWORD}\n",
+                chipnet=True,
+            )
+            assert created.returncode == 0, created.stdout + created.stderr
+            archive = project / "backups/chipnet-wallet.ecd.gpg"
+            assert archive.is_file()
+            manifest = archive_manifest(archive)
+            assert manifest["network"] == "chipnet"
+
+            wrong_network_restore = run_public(
+                project,
+                "restore",
+                "chipnet-wallet",
+                state_home,
+                f"y\n{PASSWORD}\n",
+                chipnet=False,
+            )
+            assert wrong_network_restore.returncode != 0
+            wrong_network_output = wrong_network_restore.stdout + wrong_network_restore.stderr
+            assert "backup network chipnet does not match mainnet" in wrong_network_output, wrong_network_output
+            assert "Backup validation failed; no live wallet data was changed." in wrong_network_output
+            assert wallet_value(active, "chipnet/wallets/default_wallet") == "wallet-chipnet-original"
+            assert_no_restore_artifacts(state_home, project_name)
+            print("PASS public backup launcher resolves Chipnet from the merged Compose service and rejects mainnet restore")
+    finally:
+        remove_volume(active)
+        for volume in rollback_volumes(project_name):
             remove_volume(volume)
 
 
 if __name__ == "__main__":
     test_backup_acceptance()
+    test_chipnet_public_backup_uses_effective_compose_network()

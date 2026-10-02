@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import socket
 import subprocess
@@ -44,11 +45,11 @@ def wait_log(container: str, *, count: int = 1) -> list[dict]:
     raise AssertionError(f"Caddy did not write {count} structured access log records: {container}")
 
 
-def caddyfile(listen_port: int) -> str:
+def caddyfile(listen_port: int, *, trusted_proxy: str = "203.0.113.254/32") -> str:
     return f'''{{
     admin off
     servers {{
-        trusted_proxies static 127.0.0.1/32 ::1/128
+        trusted_proxies static {trusted_proxy}
         trusted_proxies_strict
         client_ip_headers CF-Connecting-IP X-Forwarded-For
     }}
@@ -124,7 +125,7 @@ def main() -> None:
         trusted_name = f"ecd-client-ip-trusted-{os.getpid()}"
         direct_port = free_port()
         trusted_port = free_port()
-        trusted_config.write_text(caddyfile(trusted_port), encoding="utf-8")
+        trusted_config.write_text(caddyfile(80), encoding="utf-8")
         try:
             start(direct_name, config, direct_port, host_network=False)
             request(
@@ -140,7 +141,9 @@ def main() -> None:
             assert direct_peer and direct_peer != "203.0.113.123", direct_record
             assert_record(direct_record, direct_peer, ("203.0.113.123", "203.0.113.124"))
 
-            start(trusted_name, trusted_config, trusted_port, host_network=True)
+            trusted_range = ipaddress.ip_network(direct_peer, strict=False)
+            trusted_config.write_text(caddyfile(80, trusted_proxy=str(trusted_range)), encoding="utf-8")
+            start(trusted_name, trusted_config, trusted_port, host_network=False)
             request(trusted_port, container=trusted_name, headers={"CF-Connecting-IP": "198.51.100.20"})
             trusted_record = wait_log(trusted_name)[-1]
             assert_record(trusted_record, "198.51.100.20", ("127.0.0.1",))

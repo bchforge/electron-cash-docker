@@ -46,7 +46,7 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-def compose_base(project: str, override: Path, *, rpc: bool = False) -> list[str]:
+def compose_base(project: str, override: Path, *, rpc: bool = False, chipnet: bool = False) -> list[str]:
     command = [
         "docker",
         "compose",
@@ -93,6 +93,9 @@ def compose_environment(*, enabled: bool, host_port: int | None = None) -> dict[
             "JSONRPC_ENABLED": str(enabled).lower(),
             "JSONRPC_USER": RPC_USER,
             "JSONRPC_PASSWORD": RPC_PASSWORD if enabled else "",
+            "CHIPNET": "false",
+            "TESTNET4": "false",
+            "NETWORK": "mainnet",
         }
     )
     if host_port is not None:
@@ -116,9 +119,13 @@ def wait_for_running(command: list[str], environment: dict[str, str]) -> str:
     raise AssertionError("Electron Cash did not become running")
 
 
-def wait_for_daemon(command: list[str], environment: dict[str, str]) -> None:
+def wait_for_daemon(command: list[str], environment: dict[str, str], *, chipnet: bool = False) -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
+        logs = run([*command, "logs", "--no-color", "electron-cash"], env=environment)
+        if "[+] Electron Cash daemon ready" not in logs.stdout:
+            time.sleep(1)
+            continue
         result = run(
             [
                 *command,
@@ -128,6 +135,7 @@ def wait_for_daemon(command: list[str], environment: dict[str, str]) -> None:
                 "10001:10001",
                 "electron-cash",
                 CLI,
+                *( ("--chipnet",) if chipnet else () ),
                 "daemon",
                 "status",
             ],
@@ -210,11 +218,15 @@ def test_rpc_missing_or_empty_credentials_fail_closed() -> None:
                 "-e",
                 "MODE=headless",
                 "-e",
+                "ECD_HEADLESS_OVERLAY=true",
+                "-e",
                 "USE_TOR=false",
                 "-e",
                 "CASHFUSION_ENABLED=true",
                 "-e",
                 "JSONRPC_ENABLED=true",
+                "-e",
+                "ECD_RPC_OVERLAY=true",
                 "-e",
                 "JSONRPC_USER",
                 "-e",
@@ -227,6 +239,18 @@ def test_rpc_missing_or_empty_credentials_fail_closed() -> None:
         assert message in result.stdout + result.stderr
         if password:
             assert password not in result.stdout + result.stderr
+
+
+def test_rpc_cannot_activate_without_capability_overlays() -> None:
+    for extra in ([], ["-e", "ECD_GUI_OVERLAY=true", "-e", "ECD_RPC_OVERLAY=true"]):
+        result = run([
+            "docker", "run", "--pull=never", "--rm", "--network", "none",
+            "-e", "NETWORK=mainnet", "-e", "MODE=headless", "-e", "USE_TOR=false",
+            "-e", "JSONRPC_ENABLED=true", "-e", "JSONRPC_USER=synthetic",
+            "-e", "JSONRPC_PASSWORD=synthetic", *extra, IMAGE,
+        ])
+        assert result.returncode != 0
+        assert "JSON-RPC requires the headless and RPC overlays" in result.stdout + result.stderr
 
 
 def test_rpc_authentication_and_credential_exposure() -> None:
@@ -335,12 +359,90 @@ def test_rpc_authentication_and_credential_exposure() -> None:
             )
 
 
+def test_chipnet_headless_rpc_uses_the_chipnet_daemon_and_same_volume() -> None:
+    project = unique_project("chipnet-rpc")
+    host_port = free_port()
+    wallet_volume = unique_resource("chipnet-rpc-wallet")
+    tor_volume = unique_resource("chipnet-rpc-tor")
+    environment = compose_environment(enabled=True, host_port=host_port)
+    environment.update(
+        {
+            "NETWORK": "chipnet",
+            "WALLET_AUTO_CREATE": "true",
+            "TEST_WALLET_PASSWORD": "chipnet-rpc-test-password",
+            "USE_TOR": "false",
+        }
+    )
+    with tempfile.TemporaryDirectory(prefix="bchforge-chipnet-rpc-") as temporary:
+        override = write_volume_override(temporary, wallet_volume, tor_volume)
+        compose = compose_base(project, override, rpc=True, chipnet=True)
+        try:
+            config_result = run([*compose, "config", "--format", "json"], env=environment)
+            assert config_result.returncode == 0, config_result.stdout + config_result.stderr
+            service = json.loads(config_result.stdout)["services"]["electron-cash"]
+            assert service["environment"]["NETWORK"] == "chipnet"
+            assert service["environment"]["TESTNET4"] == "false"
+            assert service["environment"]["JSONRPC_ENABLED"] == "true"
+            assert len(service.get("ports", [])) == 1
+            assert service["ports"][0]["host_ip"] == "127.0.0.1"
+            assert service["ports"][0]["target"] == 50001
+            assert service["ports"][0]["published"] == str(host_port)
+
+            started = run([*compose, "up", "-d", "--no-build"], env=environment, timeout=180)
+            assert started.returncode == 0, started.stdout + started.stderr
+            container = wait_for_running(compose, environment)
+            wait_for_daemon(compose, environment, chipnet=True)
+
+            info = run(
+                [*compose, "exec", "-T", "--user", "10001:10001", "electron-cash", CLI, "--chipnet", "getinfo"],
+                env=environment,
+            )
+            assert info.returncode == 0, info.stdout + info.stderr
+            info_data = json.loads(info.stdout)
+            assert info_data["path"] == "/home/electroncash/.electron-cash/chipnet"
+
+            inspected = run(["docker", "inspect", container])
+            assert inspected.returncode == 0, inspected.stdout + inspected.stderr
+            instance = json.loads(inspected.stdout)[0]
+            assert "NETWORK=chipnet" in instance["Config"]["Env"]
+            assert instance["Mounts"]
+            wallet_mount = next(
+                mount for mount in instance["Mounts"]
+                if mount.get("Destination") == "/home/electroncash/.electron-cash"
+            )
+            assert wallet_mount["Name"] == wallet_volume
+            assert instance["NetworkSettings"]["Ports"].get("6080/tcp") is None
+            assert instance["NetworkSettings"]["Ports"].get("5900/tcp") is None
+
+            body = json.dumps({"method": "getinfo", "params": [], "id": 1}).encode()
+            authorization = base64.b64encode(f"{RPC_USER}:{RPC_PASSWORD}".encode()).decode()
+            request = Request(
+                f"http://127.0.0.1:{host_port}/",
+                data=body,
+                headers={
+                    "Authorization": f"Basic {authorization}",
+                    "Content-Type": "application/json",
+                },
+            )
+            with urlopen(request, timeout=5) as response:
+                rpc_info = json.loads(response.read())
+            assert rpc_info["result"]["path"] == "/home/electroncash/.electron-cash/chipnet"
+            print("PASS Chipnet headless RPC selects the Chipnet datadir and loopback RPC mapping")
+        finally:
+            record_cleanup_result(
+                run([*compose, "down", "-v", "--remove-orphans"], env=environment, timeout=120),
+                [*compose, "down", "-v", "--remove-orphans"],
+            )
+
+
 def main() -> None:
     test_default_rpc_is_disabled()
     test_rpc_disabled_removes_stale_persisted_credentials()
     test_rpc_missing_or_empty_credentials_fail_closed()
+    test_rpc_cannot_activate_without_capability_overlays()
     test_rpc_authentication_and_credential_exposure()
-    print("PASS RPC configuration, authentication, and exposure checks")
+    test_chipnet_headless_rpc_uses_the_chipnet_daemon_and_same_volume()
+    print("PASS mainnet/Chipnet RPC configuration, authentication, and exposure checks")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from network_selection import NETWORK_FLAGS
+
 
 FORMAT = "ecd-wallet-backup"
 FORMAT_VERSION = 1
@@ -31,15 +33,19 @@ CONFIG_SECRET_KEYS = {
 
 
 def _config_path(network: str) -> Path:
-    return Path("testnet4/config") if network == "testnet4" else Path("config")
+    if network not in NETWORK_FLAGS:
+        raise RuntimeError(f"unsupported backup network: {network}")
+    if network == "mainnet":
+        return Path("config")
+    return Path(network) / "config"
 
 
 def _included_roots(network: str) -> tuple[str, ...]:
+    if network not in NETWORK_FLAGS:
+        raise RuntimeError(f"unsupported backup network: {network}")
     if network == "mainnet":
         return (".electron-cash-docker", "config", "wallets", "mainnet")
-    if network == "testnet4":
-        return (".electron-cash-docker", "testnet4")
-    raise RuntimeError(f"unsupported backup network: {network}")
+    return (".electron-cash-docker", network)
 
 
 def _relative_files(source: Path, network: str) -> list[Path]:
@@ -80,7 +86,7 @@ def _is_network_config(relative: Path, network: str) -> bool:
         return False
     if network == "mainnet":
         return relative.parts[:1] in {("config",), ("mainnet",)}
-    return relative.parts[:1] == (network,)
+    return relative == _config_path(network)
 
 
 def _sanitize_config(value):
@@ -221,6 +227,8 @@ def _validate_manifest(
     network: str,
     ec_version: str,
 ) -> list[tuple[dict, tarfile.TarInfo]]:
+    if manifest["network"] not in NETWORK_FLAGS:
+        raise RuntimeError("backup has an unsupported network identity")
     if manifest["network"] != network:
         raise RuntimeError(f"backup network {manifest['network']} does not match {network}")
     if manifest.get("electron_cash_version") != ec_version:
@@ -510,9 +518,32 @@ def replace_archive(archive_path: Path, target: Path, network: str, ec_version: 
         _extract_pairs(archive_path, stage, pairs)
         normalize_runtime_ownership(stage)
         validate_target(archive_path, stage, network, ec_version)
-        _copy_tree(stage, target, replace=True, preserve_target_root=True)
+        # Preserve every other network in the shared named volume. The host
+        # wrapper has already taken a verified full-volume rollback snapshot.
+        merged = Path(tempfile.mkdtemp(prefix="ecd-merged-", dir="/tmp"))
+        try:
+            _copy_tree(target, merged, replace=False)
+            for name in _included_roots(network):
+                old = merged / name
+                if old.is_dir():
+                    shutil.rmtree(old)
+                elif old.exists():
+                    old.unlink()
+            for name in _included_roots(network):
+                fresh = stage / name
+                if fresh.is_dir():
+                    shutil.copytree(fresh, merged / name)
+                elif fresh.is_file():
+                    shutil.copy2(fresh, merged / name)
+            normalize_runtime_ownership(merged)
+            _copy_tree(merged, target, replace=True, preserve_target_root=True)
+        finally:
+            shutil.rmtree(merged, ignore_errors=True)
         normalize_runtime_ownership(target)
-        validate_target(archive_path, target, network, ec_version)
+        for entry, _member in pairs:
+            restored = target / entry["path"]
+            if not restored.is_file() or _hash_file(restored) != entry["sha256"]:
+                raise RuntimeError(f"restored hash does not match manifest: {entry['path']}")
         del manifest
     finally:
         shutil.rmtree(stage, ignore_errors=True)

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "automated_scenario_contract",
+  "capability": "mac-xquartz",
+  "scenarios": {
+    "missing-xquartz": {"required": true, "expected_error": "install XQuartz first"},
+    "preexisting-project-resource": {"required": true, "expected_error": "refusing XQuartz cleanup authority"},
+    "tcp-listener-restore": {"required": true, "initial_nolisten_tcp": 1, "restored_nolisten_tcp": 1},
+    "docker-desktop-route": {"required": true, "display": "host.docker.internal:0"},
+    "safe-close-and-cleanup": {"required": true, "expected_compose_action": "down --remove-orphans"},
+    "signal-cleanup": {"required": true, "signals": ["SIGINT", "SIGTERM"]},
+    "no-unrestricted-xhost": {"required": true, "forbidden_operation": "xhost +"}
+  }
+}

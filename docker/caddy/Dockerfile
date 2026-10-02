@@ -17,7 +17,9 @@ RUN curl -fsSL -o caddy.tar.gz \
 WORKDIR /src/caddy-${CADDY_VERSION}
 
 # Rebuild the pinned Caddy source with explicitly pinned dependency updates.
-RUN go mod edit -go=1.26.0 \
+# Use host networking only for dependency resolution/build so Go can reach both
+# the module proxy and checksum transparency log from constrained BuildKit hosts.
+RUN --network=host go mod edit -go=1.26.0 \
         -require=github.com/quic-go/quic-go@v0.59.1 \
         -require=github.com/smallstep/certificates@v0.30.2 \
         -require=go.opentelemetry.io/otel@v1.44.0 \
@@ -35,8 +37,8 @@ RUN apk add --no-cache \
         c-ares=1.34.8-r0 \
         curl=8.22.0-r0 \
         libcurl=8.22.0-r0 \
-        libcrypto3=3.5.8-r0 \
-        libssl3=3.5.8-r0
+        libcrypto3=3.5.9-r0 \
+        libssl3=3.5.9-r0
 
 COPY --from=builder /out/caddy /usr/bin/caddy
 COPY cloudflare-ipv4.txt cloudflare-ipv6.txt /etc/caddy/
