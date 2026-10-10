@@ -350,7 +350,7 @@ def test_rpc_authentication_and_credential_exposure() -> None:
             logs = run(["docker", "logs", container])
             assert RPC_PASSWORD not in logs.stdout + logs.stderr
             assert RPC_PASSWORD not in f"http://127.0.0.1:{rpc_port}/"
-            tracked = run(["git", "grep", "-n", RPC_PASSWORD, "--", "."])
+            tracked = run(["git", "grep", "-n", "-F", "-e", RPC_PASSWORD, "--", "."])
             assert tracked.returncode == 1, tracked.stdout + tracked.stderr
         finally:
             record_cleanup_result(

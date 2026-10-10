@@ -12,15 +12,16 @@ developer Python environment for its standalone binary (no system install).
 Example (from the repository root, with the developer Python environment active):
     python3 scripts/record_demo.py \
       --mode record \
-      --url https://ecd-demo.bchforge.org/ \
-      --env-file /home/ubuntu/.local/state/electron-cash-docker/demo-ecd-demo-20260923T054928Z/demo.env \
-      --project-name ecd-demo-20260923t054928z \
+      --url https://demo.example.org/ \
+      --env-file ~/.local/state/electron-cash-docker/demo.env \
+      --project-name electron-cash-demo \
       --fps 12 --final-hold 7 \
       --output docs/assets/electron-cash-docker-demo.gif
 
-After inspecting the candidate and validation PNGs under /tmp/ecd-demo-fluid:
+After inspecting the candidate and validation PNGs under /tmp/electron-cash-demo:
     python3 scripts/record_demo.py --mode install
-Use the same URL/project/output/work-dir arguments if overriding the defaults.
+Set DEMO_URL or pass --url. Use the same URL/project/output/work-dir arguments
+when installing the inspected candidate.
 
 Safety: password is read from env (BASIC_AUTH_PASSWORD or the local env file);
 it is never stored or printed. Never start a CashFusion round. After showing the
@@ -48,8 +49,8 @@ import subprocess
 import time
 from urllib.parse import urlsplit
 
-DEFAULT_ENV = Path('/home/ubuntu/.local/state/electron-cash-docker/'
-                   'demo-ecd-demo-20260923T054928Z/demo.env')
+DEFAULT_ENV = Path.home() / '.local' / 'state' / 'electron-cash-docker' / 'demo.env'
+DEFAULT_PROJECT_NAME = 'electron-cash-demo'
 WIDTH, HEIGHT = 1280, 800
 
 OVERLAY = r"""
@@ -490,19 +491,22 @@ def main():
         epilog=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--mode',choices=['record','install'],required=True,
                         help='record candidate; install only after visual validation')
-    parser.add_argument('--url',default='https://ecd-demo.bchforge.org/',help='HTTPS demo URL')
+    parser.add_argument('--url',default=os.environ.get('DEMO_URL'),help='HTTPS demo URL (or set DEMO_URL)')
     parser.add_argument('--env-file',type=Path,default=DEFAULT_ENV,
                         help='local password env file; BASIC_AUTH_PASSWORD environment takes precedence')
-    parser.add_argument('--project-name',default='ecd-demo-20260923t054928z',help='dedicated running Compose project')
+    parser.add_argument('--project-name',default=DEFAULT_PROJECT_NAME,help='dedicated running Compose project')
     parser.add_argument('--output',type=Path,default=Path('docs/assets/electron-cash-docker-demo.gif'),help='final GIF destination')
     parser.add_argument('--fps',type=int,default=12,help='continuous GIF cadence (10–15 fps)')
     parser.add_argument('--final-hold',type=float,default=7,help='final green Auto-Fuse status hold, in seconds (5–10)')
-    parser.add_argument('--work-dir',type=Path,default=Path('/tmp/ecd-demo-fluid'),help='intermediate media directory under /tmp')
+    parser.add_argument('--work-dir',type=Path,default=Path('/tmp/electron-cash-demo'),help='intermediate media directory under /tmp')
     args = parser.parse_args()
     if not 10 <= args.fps <= 15 or not 5 <= args.final_hold <= 10:
         parser.error('Use 10–15 fps and a 5–10 second final hold')
-    if urlsplit(args.url).scheme != 'https' or urlsplit(args.url).username:
-        parser.error('Use an HTTPS URL without embedded credentials')
+    if not args.url:
+        parser.error('--url or DEMO_URL is required')
+    url = urlsplit(args.url)
+    if url.scheme != 'https' or not url.hostname or url.username or url.password:
+        parser.error('Use an HTTPS URL with a host and no embedded credentials')
     if not args.work_dir.resolve().is_relative_to(Path('/tmp')):
         parser.error('--work-dir must stay under /tmp')
     args.work_dir.mkdir(parents=True,exist_ok=True)

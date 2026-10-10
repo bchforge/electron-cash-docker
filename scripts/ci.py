@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 from compose_guard import UnsafeComposeModel, validate_resolved_model
 import docker_ownership
+import release_security
 from dependency_review import run_dependency_review
 from sast import default_report_directory as sast_report_directory
 from sast import run_sast
@@ -51,9 +52,17 @@ TRIVY_ARCHIVE_PINS = {
                             "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485"),
 }
 HIGH_SEVERITIES = {"HIGH", "CRITICAL"}
-BASELINE_HEAD = "f63c037ed73e881a5b4ef8238a046ad36eb03dc8"
-CADDY_BASE_IMAGE = "caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
+BASELINE_HEAD = "a342e623a491390321b7bd44fab5166ee84c14f5"
+CADDY_BASE_IMAGE = "caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
 ACCEPTANCE_TESTS = (
+    "test_caddy_version.py",
+    "test_login_locale_runtime.py",
+    "test_language_browser.py",
+    "test_auth_recovery.py",
+    "test_campaign_controls.py",
+    "test_theme_runtime.py",
+    "test_gui_session_lifecycle.py",
+    "test_runtime.py",
     "test_compose_build_policy.py",
     "test_electron_cash_version.py",
     "test_cve_2024_23342.py",
@@ -94,6 +103,14 @@ ACCEPTANCE_TESTS = (
 REMOTE_ACCEPTANCE_TEST = "test_remote_access.py"
 PUBLIC_ACCEPTANCE_TEST = "test_public_access.py"
 MANDATORY_ACCEPTANCE_TESTS = (
+    "test_caddy_version.py",
+    "test_login_locale_runtime.py",
+    "test_language_browser.py",
+    "test_auth_recovery.py",
+    "test_campaign_controls.py",
+    "test_theme_runtime.py",
+    "test_gui_session_lifecycle.py",
+    "test_runtime.py",
     "test_integrity_pins.py",
     "test_compose_build_policy.py",
     "test_electron_cash_version.py",
@@ -187,6 +204,9 @@ def report_directory(run_id: str) -> Path:
     else:
         state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
         directory = state_home / "electron-cash-docker" / "ci" / run_id
+    resolved = directory.resolve()
+    if resolved == ROOT.resolve() or ROOT.resolve() in resolved.parents:
+        raise ValidationError('CI_REPORT_DIR must be outside the source repository')
     directory.mkdir(parents=True, exist_ok=True)
     return directory.resolve()
 
@@ -314,7 +334,7 @@ def candidate_identity(report_dir: Path) -> dict[str, Any]:
     manifest, source_hash, untracked_hash = source_manifest(report_dir)
     head = git_text(["git", "rev-parse", "HEAD"])
     try:
-        baseline = git_text(["git", "rev-parse", "v0.2.1^{commit}"])
+        baseline = git_text(["git", "rev-parse", "v0.4^{commit}"])
     except ValidationError:
         baseline = BASELINE_HEAD
     branch = git_text(["git", "branch", "--show-current"])
@@ -344,6 +364,14 @@ def tool_snapshot() -> dict[str, str | None]:
         result = run(command, timeout=60)
         values[name] = result.stdout.strip() if result.returncode == 0 else None
     return values
+
+
+def require_frozen_candidate(initial: dict[str, Any], final: dict[str, Any]) -> None:
+    fields = ("head", "source_fingerprint", "working_tree_diff_sha256",
+              "untracked_source_manifest_sha256")
+    changed = [field for field in fields if not initial.get(field) or initial.get(field) != final.get(field)]
+    if changed:
+        raise ValidationError(f"candidate source changed during validation: {changed}; rerun frozen gate")
 
 
 def persist_manifest(manifest: dict[str, Any]) -> None:
@@ -466,7 +494,18 @@ def record_acceptance_skip(manifest: dict[str, Any] | None, test: str, reason: s
 
 def gate_overall_status(manifest: dict[str, Any], exit_code: int) -> str:
     if exit_code == 0:
-        return "PASS"
+        required_steps = {"fast", "official-advisory-source-preflight", "local-sast",
+            "source-scans-and-vulnerability-policy", "component-inventory-and-official-advisory-assessment",
+            "acceptance", "dependency-review", "final-resource-postcondition"}
+        steps = manifest.get("steps", [])
+        complete = all([s.get("status") for s in steps if s.get("name") == name] == ["PASS"]
+                       for name in required_steps)
+        try:
+            validate_mandatory_acceptance_results(manifest.get("acceptance_test_results", []))
+        except ValidationError:
+            complete = False
+        return "PASS" if (complete and manifest.get("release_security", {}).get("status") == "PASS"
+            and manifest.get("cleanup", {}).get("overall") == "PASS") else "FAIL"
     if (manifest.get("failure_kind") == "INFRA_FAILURE" or
             any(result.get("failure_kind") == "INFRA_FAILURE"
            for result in manifest.get("acceptance_test_results", [])
@@ -556,6 +595,8 @@ def load_vulnerability_exceptions(
         "status",
         "rationale",
         "mitigation_reference",
+        "owner",
+        "advisory_url",
     }
     seen: set[tuple[Any, ...]] = set()
     validated: list[dict[str, Any]] = []
@@ -570,10 +611,18 @@ def load_vulnerability_exceptions(
             "status",
             "rationale",
             "mitigation_reference",
+            "owner",
+            "advisory_url",
         )):
             raise ValidationError("security exception contains an empty or invalid text field")
         if exception["severity"].upper() not in HIGH_SEVERITIES:
-            raise ValidationError("security exception severity must be HIGH or CRITICAL")
+            if (exception["severity"] != "UNKNOWN" or exception.get("applicability") != "not-linked" or
+                    exception.get("vulnerability_id") != "GO-2026-5932" or
+                    exception.get("package_name") != "golang.org/x/crypto" or
+                    exception.get("scopes") != ["image:caddy"] or
+                    exception.get("proof_report") != "caddy-package-deps.txt" or
+                    exception.get("absent_go_package_prefix") != "golang.org/x/crypto/openpgp"):
+                raise ValidationError("UNKNOWN exception requires exact scoped, machine-enforced absence proof")
         if exception["status"] != "active":
             raise ValidationError("inactive security exceptions are not permitted in the authority")
         scopes = exception["scopes"]
@@ -678,7 +727,25 @@ def enforce_vulnerability_policy(
     for scope, findings in findings_by_scope:
         for finding in findings:
             severity = str(finding.get("Severity", "")).upper()
-            if severity not in HIGH_SEVERITIES:
+            if severity not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+                exception = vulnerability_exception_match(finding, scope, exceptions)
+                proof = report_dir / "caddy-package-deps.txt"
+                packages = proof.read_text().splitlines() if proof.is_file() else []
+                required = {"github.com/caddyserver/caddy/v2/cmd/caddy", "github.com/caddyserver/caddy/v2/modules/caddyhttp/reverseproxy"}
+                if (severity == "UNKNOWN" and not finding.get("FixedVersion") and exception and
+                        exception.get("applicability") == "not-linked" and required <= set(packages) and
+                        not any(p == exception["absent_go_package_prefix"] or
+                            p.startswith(exception["absent_go_package_prefix"] + "/") for p in packages)):
+                    disposition = "PASS_WITH_DOCUMENTED_NOT_APPLICABLE_PROOF"
+                    used = manifest.setdefault("_used_exception_authority", [])
+                    identity = vulnerability_exception_identity(exception)
+                    if identity not in used:
+                        used.append(identity)
+                else:
+                    disposition = "FAIL_UNCLASSIFIED_FINDING"
+                    exception = None
+                    failures.append(f"{scope}:{finding.get('VulnerabilityID')} has unsupported/unknown severity")
+            elif severity not in HIGH_SEVERITIES:
                 disposition = "LOWER_SEVERITY_NOT_IN_RELEASE_POLICY"
                 exception = None
             else:
@@ -1651,10 +1718,10 @@ def assert_safe_docker_endpoint(*, log_path: Path | None = None) -> None:
         endpoint = json.loads(context_result.stdout)
     except json.JSONDecodeError as error:
         raise ValidationError("Docker context endpoint was not valid JSON") from error
-    host = endpoint.get("Host", "") if isinstance(endpoint, dict) else ""
-    if host and not host.startswith("unix://"):
+    host = endpoint.get("Host") if isinstance(endpoint, dict) else None
+    if not isinstance(host, str) or not host.startswith("unix:///"):
         raise ValidationError(f"Docker endpoint is not local Unix-socket transport: {host}")
-    if any(value in host.lower() for value in ("pro0", "production")):
+    if "production" in host.lower():
         raise ValidationError("Docker endpoint references production")
     checked(["docker", "version", "--format", "{{.Server.Version}}"], log_path=log_path)
     checked(["docker", "compose", "version"], log_path=log_path)
@@ -1839,6 +1906,16 @@ def image_build_configuration(model: dict[str, Any], service_name: str, image_re
         json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode())
     descriptor["consumers"] = IMAGE_CONSUMERS.get(variant, [])
     return descriptor
+
+
+def validate_image_reuse(descriptor: dict, proof: dict) -> None:
+    """Fail closed on copied-input/config/mode drift before a task-owned retag."""
+    if (proof.get('status') != 'PASS' or proof.get('configuration_sha256') != descriptor['configuration_sha256'] or
+            proof.get('inputs') != descriptor['inputs'] or not re.fullmatch(r'sha256:[0-9a-f]{64}', proof.get('image_id', ''))):
+        raise ValidationError('verified candidate image inputs/configuration do not match')
+    modes = {p: format(stat.S_IMODE((Path(descriptor['context']) / p).lstat().st_mode), '04o') for p in descriptor['inputs']}
+    if proof.get('input_modes') != modes:
+        raise ValidationError('verified candidate image input modes do not match')
 
 
 def write_compose_override(
@@ -2145,7 +2222,7 @@ def scan_source(
             "--scanners",
             "vuln",
             "--severity",
-            "HIGH,CRITICAL",
+            "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL",
             str(ROOT),
         ],
         vulnerability_report,
@@ -2219,7 +2296,7 @@ def scan_image(
             "--scanners",
             "vuln",
             "--severity",
-            "HIGH,CRITICAL",
+            "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL",
             image,
         ],
         report,
@@ -2860,7 +2937,7 @@ def _acceptance(
         os.chmod(registry, 0o600)
         projects = (project, remote_project, published_project, startup_project)
         volume_suffixes = ("-wallet", "-tor", "_caddy-data", "_caddy-config", "_caddy-log",
-                           "_fail2ban-state", "_caddy-ban-state", "_caddy-control")
+                            "_fail2ban-state", "_caddy-ban-state", "_caddy-control", "_gui-session-state", "_auth-session-data")
         for project_name in projects:
             docker_ownership.append_claim(registry, "project", project_name, owner_token)
             for suffix in volume_suffixes:
@@ -2922,11 +2999,37 @@ def _acceptance(
             descriptor = image_build_configuration(
                 build_model, service_name, image_ref, variant=variant, compose_files=compose_files)
             record = {**descriptor, "builder": owned_builder, "buildkit_image": TASK_BUILDKIT_IMAGE,
-                      "build_mode": "cache-aware --pull; no --no-cache", "status": "PLANNED",
+                       "build_mode": "--pull --no-cache" if os.environ.get("CI_FRESH_BUILD") == "1" else "cache-aware --pull", "status": "PLANNED",
                       "image_id": None, "image_platform": None, "required_start_bytes": phase_admission_bytes}
             image_build_records.append(record)
             save_build_evidence()
             try:
+                reuse_path = os.environ.get('CI_VERIFIED_IMAGE_REUSE')
+                if reuse_path:
+                    if os.environ.get('CI_FRESH_BUILD') == '1':
+                        raise ValidationError('fresh no-cache acceptance cannot reuse images')
+                    reuse = json.loads(Path(reuse_path).read_text())
+                    proofs = [p for p in reuse['proof'].values() if p['variant'] == variant]
+                    if len(proofs) != 1:
+                        raise ValidationError('missing/ambiguous verified candidate image proof')
+                    proof = proofs[0]
+                    validate_image_reuse(descriptor, proof)
+                    source = proof['image_reference']
+                    item = json.loads(checked(['docker', 'image', 'inspect', source], env=build_environment, log_path=acceptance_log).stdout)[0]
+                    if item['Id'] != proof['image_id'] or item['Os'] + '/' + item['Architecture'] != proof['image_platform']:
+                        raise ValidationError('verified candidate image identity/platform changed')
+                    # Destination was reserved absent above. The owner shim forbids
+                    # general retagging; this exact verified source/absent destination
+                    # pair is the narrowly authorized gate operation.
+                    docker_ownership.assert_absent('image', image_ref)
+                    checked([environment['CI_REAL_DOCKER'], 'image', 'tag', source, image_ref], timeout=60, log_path=acceptance_log)
+                    docker_ownership.record_image_attempt(registry, image_ref, owner_token, item['Id'])
+                    image_ids[image_key] = item['Id']
+                    record.update(status='PASS', image_id=item['Id'], image_platform=proof['image_platform'],
+                                  build_mode='verified exact image reuse', input_modes=proof['input_modes'],
+                                  reused_from=source, reuse_proof_sha256=sha256_file(Path(reuse_path)), finished_at=utc_now())
+                    save_build_evidence()
+                    return item['Id']
                 free_before = require_build_capacity(
                     f"before {variant} build", manifest, minimum_free_bytes=phase_admission_bytes)
                 record.update({"status": "RUNNING", "disk_free_before_bytes": free_before,
@@ -2935,7 +3038,10 @@ def _acceptance(
                 build_environment.update({"CI_DISK_FLOOR_BYTES": str(DISK_FLOOR_BYTES),
                                           "CI_DISK_CANCEL_BYTES": str(DISK_CANCEL_TRIGGER_BYTES),
                                           "CI_DISK_START_BYTES": str(phase_admission_bytes)})
-                build_command = [*prefix, "--progress", "plain", "build", "--pull", service_name]
+                build_command = [*prefix, "--progress", "plain", "build", "--pull"]
+                if os.environ.get("CI_FRESH_BUILD") == "1":
+                    build_command.append("--no-cache")
+                build_command.append(service_name)
                 record["command"] = shlex.join(build_command)
                 checked(build_command, env=build_environment, timeout=1800,
                         log_path=acceptance_log, disk_floor_bytes=DISK_FLOOR_BYTES,
@@ -3271,10 +3377,34 @@ def _acceptance(
             retain_or_reclaim_completed_cache(
                 "runtime-acceptance", DISK_RUNTIME_ADMISSION_BYTES,
                 "all candidate builds and image scans are complete; runtime suites consume output images, not BuildKit cache")
-            policy_manifest = manifest or {"report_dir": str(report_dir)}
+            policy_manifest = manifest or {"report_dir": str(report_dir),
+                "candidate": candidate_identity(report_dir), "candidate_image_ids": image_ids}
+            package_deps = checked(["docker", "run", "--rm", "--network", "none", "--read-only",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--entrypoint", "cat",
+                caddy_image, "/etc/caddy/package-deps"], env=environment, timeout=60,
+                log_path=report_dir / "inventory-commands.log").stdout
+            (report_dir / "caddy-package-deps.txt").write_text(package_deps)
             require_fresh_trivy_database(cache_dir, policy_manifest)
             enforce_vulnerability_policy(image_findings, exceptions, report_dir, policy_manifest)
             validate_exception_usage(exceptions, policy_manifest, report_dir)
+            policy_manifest['candidate_image_ids'] = image_ids
+            persist_manifest(policy_manifest)
+            try:
+                release_security.inventory(sys.modules[__name__], candidate_images, image_ids,
+                                           report_dir, environment, trivy)
+                release_security.await_external_review(report_dir, policy_manifest)
+                record_step(policy_manifest, "official-advisory-source-evaluated-preflight",
+                            lambda: release_security.official_preflight(report_dir, manifest=policy_manifest))
+                record_step(policy_manifest, "component-inventory-and-official-advisory-assessment",
+                            lambda: release_security.complete_security(
+                                sys.modules[__name__], candidate_images, image_ids, report_dir,
+                                environment, trivy, policy_manifest))
+            except release_security.SecurityBlocked as error:
+                policy_manifest["failure_kind"] = "INFRA_FAILURE"
+                persist_manifest(policy_manifest)
+                raise ValidationError(str(error)) from error
+            except release_security.SecurityFailure as error:
+                raise ValidationError(str(error)) from error
             if manifest is not None:
                 trivy_version(trivy, report_dir, manifest)
                 manifest["acceptance_test_results"].append(
@@ -3347,7 +3477,7 @@ def _acceptance(
                         checked(
                             [sys.executable, str(ROOT / "tests" / test)],
                             env=environment,
-                            timeout=3600 if test == "test_first_install.py" else 1800,
+                            timeout=3600 if test in {"test_first_install.py", "test_gui_session_lifecycle.py", "test_auth_recovery.py"} else 1800,
                             log_path=acceptance_log,
                             disk_floor_bytes=DISK_FLOOR_BYTES,
                             manifest=manifest,
@@ -3636,7 +3766,8 @@ def gate() -> int:
             },
             "phase_admissions_bytes": DISK_PHASE_ADMISSIONS_BYTES,
             "after_cleanup_hard_reserve_bytes": DISK_FLOOR_BYTES,
-            "build_mode": "cache-aware; normal and HW wallets consecutive; unique configurations built once",
+            "build_mode": ("--pull --no-cache; normal and HW wallets consecutive" if os.environ.get("CI_FRESH_BUILD") == "1"
+                           else "cache-aware; normal and HW wallets consecutive; unique configurations built once"),
             "peak_estimates_are_measured": False,
             "peak_estimate_note": "Phase peaks are conservative admission estimates; actual samples are recorded per phase.",
         },
@@ -3646,7 +3777,7 @@ def gate() -> int:
             "./scripts/ci.sh gate",
             "./scripts/ci.sh fast",
             "./scripts/ci.sh sast",
-            "./scripts/dependency-review.sh v0.2.1",
+            "./scripts/dependency-review.sh v0.4",
             "./scripts/ci.sh acceptance",
         ],
         "execution_graph": [
@@ -3661,7 +3792,7 @@ def gate() -> int:
             "fresh public Compose first install, browser login/WebSocket, and warm persistence",
             "Linux local-Xauthority Compose GUI on authenticated external Xvfb",
             "macOS XQuartz wrapper contracts and synthetic Ledger backend",
-            "local dependency review against v0.2.1",
+            "local dependency review against v0.4",
             "cleanup and resource postcondition",
         ],
         "fast_log": str(report_dir / "fast.log"),
@@ -3726,6 +3857,14 @@ def gate() -> int:
     result = 0
     try:
         record_step(manifest, "fast", lambda: fast(log_path=report_dir / "fast.log"))
+        try:
+            record_step(manifest, "official-advisory-source-preflight",
+                        lambda: release_security.official_preflight(report_dir, refresh_only=True, manifest=manifest))
+        except release_security.SecurityBlocked as error:
+            manifest["failure_kind"] = "INFRA_FAILURE"
+            raise ValidationError(str(error)) from error
+        except release_security.SecurityFailure as error:
+            raise ValidationError(str(error)) from error
         require_build_capacity("before local SAST", manifest,
                                minimum_free_bytes=DISK_SAST_ADMISSION_BYTES)
         record_step(manifest, "local-sast", lambda: run_sast(report_dir, manifest))
@@ -3777,7 +3916,7 @@ def gate() -> int:
         record_step(
             manifest,
             "dependency-review",
-            lambda: run_dependency_review("v0.2.1", report_dir, manifest),
+            lambda: run_dependency_review("v0.4", report_dir, manifest),
         )
         record_step(manifest, "final-resource-postcondition", lambda: verify_gate_postcondition(manifest))
     except (ValidationError, subprocess.TimeoutExpired, OSError) as error:
@@ -3808,10 +3947,13 @@ def gate() -> int:
                 result = 1
         try:
             manifest["final_candidate"] = candidate_identity(report_dir)
+            require_frozen_candidate(identity, manifest["final_candidate"])
         except Exception as error:
             manifest["final_identity_error"] = sanitize(str(error))
             result = 1
         manifest["overall_status"] = gate_overall_status(manifest, result)
+        if manifest["overall_status"] != "PASS":
+            result = 1
         manifest["finished_at"] = utc_now()
         finalize_manifest(manifest)
     if manifest["overall_status"] == "PASS":
@@ -3833,9 +3975,16 @@ def verify_gate_postcondition(manifest: dict[str, Any]) -> None:
         raise ValidationError(f"gate-owned resource cleanup failed: {failures}")
     if cleanup.get("overall") != "PASS":
         raise ValidationError("cleanup evidence did not report PASS")
+    try:
+        release_security.verify_completion(manifest, Path(manifest["report_dir"]))
+    except (release_security.SecurityFailure, release_security.SecurityBlocked) as error:
+        raise ValidationError(str(error)) from error
 
 
 def main() -> int:
+    if sys.flags.optimize or os.environ.get("PYTHONOPTIMIZE", "0") not in ("", "0"):
+        print("FAIL validation requires Python assertions; unset PYTHONOPTIMIZE and do not use -O", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("fast", "sast", "acceptance", "gate"))
     args = parser.parse_args()

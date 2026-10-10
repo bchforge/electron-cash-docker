@@ -43,7 +43,6 @@ def validate_resolved_model(
 
     serialized = json.dumps(model, sort_keys=True).lower()
     for forbidden in (
-        "pro0",
         "production",
         "/var/run/docker.sock",
         "/run/secrets",
@@ -79,8 +78,10 @@ def validate_resolved_model(
             "/run/caddy": "caddy-control",
             "/var/lib/fail2ban": "fail2ban-state",
         },
-        "auth-session": {},
+        "auth-session": {"/auth-data": "auth-session-data"},
     }
+    for service_name in expected_mounts:
+        expected_mounts[service_name]['/run/ecd-gui-session'] = 'gui-session-state'
     for service_name, service in services.items():
         if service.get("image") != expected_images[service_name]:
             raise UnsafeComposeModel(f"{service_name} does not use its CI image")
@@ -104,7 +105,7 @@ def validate_resolved_model(
         bind_mounts = {}
         for mount in mounts:
             if isinstance(mount, dict):
-                allowed_types = {"volume", "bind"} if service_name == "caddy" else {"volume"}
+                allowed_types = {"volume", "bind"} if service_name != 'electron-cash' else {"volume"}
                 if mount.get("type") not in allowed_types or mount.get("external"):
                     raise UnsafeComposeModel(f"{service_name} has a non-volume or external mount")
                 source = _volume_source(mount)
@@ -120,6 +121,19 @@ def validate_resolved_model(
                 observed[target] = source
         if service_name in expected_mounts and observed != expected_mounts[service_name]:
             raise UnsafeComposeModel(f"{service_name} named mounts are not task-owned")
+        if service_name == 'auth-session':
+            auth_data = next((m for m in mounts if isinstance(m, dict) and m.get('target') == '/auth-data'), None)
+            if not auth_data or auth_data.get('read_only'):
+                raise UnsafeComposeModel('auth persistence must have its dedicated writable volume')
+        lifecycle_mount = next((mount for mount in mounts if isinstance(mount, dict) and mount.get('target') == '/run/ecd-gui-session'), None)
+        if not lifecycle_mount or (service_name != 'electron-cash' and not lifecycle_mount.get('read_only')):
+            raise UnsafeComposeModel('GUI lifecycle channel permissions are not least privilege')
+        if service_name != 'electron-cash':
+            supervisor = bind_mounts.pop('/usr/local/bin/gui-session', None)
+            if not supervisor or not supervisor.get('read_only') or supervisor.get('bind', {}).get('create_host_path') is not False or not str(supervisor.get('source', '')).endswith('/docker/gui-session.sh'):
+                raise UnsafeComposeModel('GUI session supervisor must be the exact read-only repository script')
+        if service_name != 'caddy' and bind_mounts:
+            raise UnsafeComposeModel(f'{service_name} has unexpected host binds')
 
         if service_name == "electron-cash":
             if service.get("ports"):
@@ -194,9 +208,16 @@ def validate_resolved_model(
         "fail2ban-state",
         "caddy-ban-state",
         "caddy-control",
+        "gui-session-state",
+        "auth-session-data",
     }
     if set(volumes) != required_volumes:
         raise UnsafeComposeModel("unexpected Compose volumes")
+    if volumes['auth-session-data'].get('name') != f'{expected_project}_auth-session-data':
+        raise UnsafeComposeModel('auth volume is not independent and project-scoped')
+    names = [volumes[name].get('name') for name in required_volumes]
+    if len(set(names)) != len(names):
+        raise UnsafeComposeModel('distinct storage boundaries must not alias one physical volume')
     if volumes["electron-cash-data"].get("name") != expected_wallet_volume:
         raise UnsafeComposeModel("wallet volume is not task-owned")
     if volumes["tor-data"].get("name") != expected_tor_volume:

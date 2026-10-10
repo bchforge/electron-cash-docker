@@ -24,7 +24,8 @@ def scenario(outcome, *, initially_running=False, nolisten="1", x11_bin=False, d
         shutil.copy2(SCRIPT, fixture_script)
         shutil.copy2(ROOT / "scripts/mac-compose-overlay.py", project / "scripts/mac-compose-overlay.py")
         fixture_script.write_text(fixture_script.read_text().replace(
-            "xquartz_lock_file=/tmp/.X0-lock", 'xquartz_lock_file="$ECD_MOCK_X0_LOCK"'))
+            "xquartz_lock_file=/tmp/.X0-lock", 'xquartz_lock_file="$ECD_MOCK_X0_LOCK"').replace(
+            '/tmp/ecd-xquartz.XXXXXXXX', str(root / 'ecd-xquartz.XXXXXXXX')))
         (project / ".env").write_text("NETWORK=mainnet\n")
         platform_override = root / "image-platform.yml"
         platform_override.write_text(json.dumps({"services": {

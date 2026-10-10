@@ -6,6 +6,16 @@ export HOME=/home/electroncash
 export XDG_RUNTIME_DIR=/tmp/runtime-electroncash
 
 MODE=${MODE:-novnc}
+EC_LANGUAGE=${EC_LANGUAGE-en_US}
+if ! EC_LANGUAGE="${EC_LANGUAGE}" /opt/electroncash-venv/bin/python - <<'PY'
+import os
+from electroncash.i18n import languages
+if os.environ['EC_LANGUAGE'] not in languages:
+    raise SystemExit('[!] EC_LANGUAGE must be an official Electron Cash locale or empty (System)')
+PY
+then
+    exit 1
+fi
 ECD_VERSION_FILE=/etc/electroncash-docker/VERSION
 if [[ ! -r "${ECD_VERSION_FILE}" ]]; then
     echo "[!] missing product version file: ${ECD_VERSION_FILE}"
@@ -118,10 +128,12 @@ from cashfusion_defaults import (
     CashFusionConfigurationError,
     cashfusion_config_from_environment,
 )
+from gui_startup import theme_from_environment
 
 try:
     cashfusion_config_from_environment()
-except CashFusionConfigurationError as error:
+    theme_from_environment()
+except (CashFusionConfigurationError, ValueError) as error:
     print(f"[!] {error}")
     raise SystemExit(1)
 PY
@@ -302,9 +314,27 @@ kill_gracefully() {
     local name=$2
     if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
         echo "[*] Stopping ${name}"
-        kill -TERM "${pid}" 2>/dev/null || true
-        sleep 1
-        kill -KILL "${pid}" 2>/dev/null || true
+        if [ "${name}" = x11vnc ] && timeout 2 x11vnc -display :99 -R stop >/dev/null 2>&1; then
+            # Ask the owned server to exit in its normal X11 event loop.
+            # SIGTERM can interrupt Xlib cleanup while a client is closing.
+            :
+        elif [ "${name}" = openbox ] && DISPLAY=:99 timeout 2 openbox --exit >/dev/null 2>&1; then
+            :  # same owned-display event-loop shutdown for the window manager
+        else
+            kill -TERM "${pid}" 2>/dev/null || true
+        fi
+        local attempts=0
+        while kill -0 "${pid}" 2>/dev/null && [ "${attempts}" -lt 50 ]; do
+            # A zombie has already terminated; wait below reaps this owned child.
+            [ "$(ps -o stat= -p "${pid}" 2>/dev/null | cut -c1)" != Z ] || break
+            sleep 0.1
+            attempts=$((attempts + 1))
+        done
+        if kill -0 "${pid}" 2>/dev/null && [ "$(ps -o stat= -p "${pid}" 2>/dev/null | cut -c1)" != Z ]; then
+            echo "[!] ${name} exceeded graceful shutdown deadline"
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+        wait "${pid}" 2>/dev/null || true
     fi
 }
 
@@ -339,10 +369,13 @@ stop_electron_cash() {
 
 cleanup() {
     stop_electron_cash
-    kill_gracefully "${WEBSOCKIFY_PID}" "websockify"
     kill_gracefully "${X11VNC_PID}" "x11vnc"
-    kill_gracefully "${OPENBOX_PID}" "openbox"
+    kill_gracefully "${WEBSOCKIFY_PID}" "websockify"
+    # Display consumers must not keep cleanup waiting on the server they use.
+    # The wallet and VNC clients are already stopped; close the owned display
+    # before reaping the window manager's normal X11-disconnection exit.
     kill_gracefully "${XVFB_PID}" "Xvfb"
+    kill_gracefully "${OPENBOX_PID}" "openbox"
 }
 
 trap cleanup EXIT
@@ -419,10 +452,11 @@ verify_wallet_root() {
 
 ensure_config() {
     mkdir -p "${CONFIG_DIR}"
-    CONFIG_FILE="${CONFIG_FILE}" USE_TOR="${USE_TOR}" python3 - <<'PY'
+    CONFIG_FILE="${CONFIG_FILE}" USE_TOR="${USE_TOR}" EC_LANGUAGE="${EC_LANGUAGE}" python3 - <<'PY'
 import json
 import os
 import tempfile
+from gui_startup import theme_from_environment
 
 path = os.environ["CONFIG_FILE"]
 directory = os.path.dirname(path) or "."
@@ -430,9 +464,10 @@ try:
     with open(path) as handle:
         config = json.load(handle)
 except FileNotFoundError:
-    config = {}
+    config = {"language": os.environ["EC_LANGUAGE"]}
 
 config.setdefault("auto_connect", True)
+config["qt_gui_color_theme"] = theme_from_environment()
 if os.environ["USE_TOR"] == "true":
     config["proxy"] = "socks5:tor-proxy:9050"
 else:
@@ -677,7 +712,7 @@ start_headless() {
     local cli=(/opt/electroncash-venv/bin/electron-cash)
     cli+=("${EC_NET_FLAG[@]}")
     local attempts=0
-    while ! "${cli[@]}" daemon status >/dev/null 2>&1; do
+    while ! /opt/electroncash-venv/bin/python /home/electroncash/healthcheck.py >/dev/null 2>&1; do
         attempts=$((attempts + 1))
         if [ "${attempts}" -ge 30 ]; then
             echo "[!] Electron Cash daemon did not become ready"
@@ -731,11 +766,11 @@ start_novnc() {
 
     openbox-session &
     OPENBOX_PID=$!
-    x11vnc -display :99 -forever -shared -nopw -rfbport 5900 &
+    x11vnc -display :99 -forever -shared -nopw -localhost -rfbport 5900 &
     X11VNC_PID=$!
     wait_for_port localhost 5900 "x11vnc" || return 1
 
-    websockify --heartbeat 30 --web=/opt/noVNC 6080 localhost:5900 &
+    /usr/bin/python3 /home/electroncash/session-websockify.py --heartbeat 30 --web=/opt/noVNC 6080 localhost:5900 &
     WEBSOCKIFY_PID=$!
     wait_for_port localhost 6080 "noVNC" || return 1
 
@@ -768,6 +803,9 @@ fi
 echo "=========================================="
 
 verify_wallet_root
+if [ "${ECD_GUI_SESSION:-false}" = true ]; then
+    /opt/electroncash-venv/bin/python /home/electroncash/gui_session.py
+fi
 mkdir -p "${XDG_RUNTIME_DIR}" "${HOME}/.local/share"
 rm -f "${SHUTDOWN_MARKER}"
 chmod 700 "${XDG_RUNTIME_DIR}"
@@ -784,4 +822,15 @@ case "${MODE}" in
     gui) start_gui ;;
 esac
 
-wait "${ELECTRONCASH_PID}"
+wallet_status=0
+wait "${ELECTRONCASH_PID}" || wallet_status=$?
+if [ "${MODE}" = novnc ] && [ "${ECD_GUI_SESSION:-false}" = true ]; then
+    # Qt may fail during destructor teardown after its explicit aboutToQuit
+    # event. That already-committed GUI end must not resurrect the session.
+    # Unexpected crashes never publish this event and retain on-failure recovery.
+    if /opt/electroncash-venv/bin/python -c 'from gui_session import read_state; import sys; state=read_state(); sys.exit(0 if state and state[1] == "ended" else 1)'; then
+        echo "[+] Intentional GUI exit accepted (upstream status ${wallet_status})"
+        wallet_status=0
+    fi
+fi
+exit "${wallet_status}"

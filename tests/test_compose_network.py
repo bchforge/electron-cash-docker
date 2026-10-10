@@ -41,7 +41,9 @@ def main():
                for service in base["services"].values())
     assert base["services"]["caddy"]["build"]["entitlements"] == ["network.host"]
     caddy_dockerfile = (ROOT / "docker/caddy/Dockerfile").read_text(encoding="utf-8")
-    assert "RUN --network=host go mod edit -go=1.26.0" in caddy_dockerfile
+    assert "sha256sum go.mod go.sum > /out/upstream-module-locks.sha256" in caddy_dockerfile
+    assert "go mod download && go mod verify" in caddy_dockerfile
+    assert "go mod edit -require=golang.org/x/net@v0.60.0" in caddy_dockerfile
     for network in ("chipnet", "testnet", "testnet4", "scalenet", "regtest"):
         model = resolved(network=network)
         assert set(model["services"]) == set(base["services"])

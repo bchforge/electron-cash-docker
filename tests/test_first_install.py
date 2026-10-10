@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cold public Compose install using the documented dotenv and default image names."""
+"""Verify public defaults, then cold-install the same model with owned image tags."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from test_support import (
 )
 
 
-DOCKER = os.environ.get("CI_REAL_DOCKER") or shutil.which("docker") or "docker"
+DOCKER = shutil.which("docker") or "docker"
 SERVICES = ("electron-cash", "tor-proxy", "auth-session", "caddy", "fail2ban")
 IMAGE_VARIABLES = ("ELECTRON_CASH_IMAGE", "TOR_IMAGE", "AUTH_SESSION_IMAGE",
                    "CADDY_IMAGE", "FAIL2BAN_IMAGE")
@@ -46,7 +46,8 @@ def run(command: list[str], *, env: dict[str, str], timeout: int = 600) -> subpr
     if is_docker:
         command = [DOCKER, *command[1:]]
     try:
-        return subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True,
+        return subprocess.run(command, cwd=ROOT, env=env, text=True, encoding="utf-8",
+                              errors="replace", capture_output=True,
                               timeout=timeout, check=False)
     except subprocess.TimeoutExpired as error:
         if is_docker:
@@ -139,12 +140,15 @@ def main() -> None:
     tor = unique_resource("public-first-install-tor")
     owner = resource_owner()
     environment = os.environ.copy()
+    builder = environment.get("BUILDX_BUILDER")
+    assert builder and environment.get("CI_TASK_BUILDER_RECORD"), "run first-install through the canonical gate/acceptance owned builder"
     for name in {*HOST_OVERRIDES, *dotenv_keys(example)}:
         environment.pop(name, None)
     for name in tuple(environment):
         if name.startswith("COMPOSE_"):
             environment.pop(name, None)
     environment["CI_RESOURCE_OWNER"] = owner
+    environment["BUILDX_BUILDER"] = builder
 
     with tempfile.TemporaryDirectory(prefix="ecd-first-install-") as temporary:
         env_file = Path(temporary) / ".env"
@@ -168,18 +172,41 @@ def main() -> None:
         expected_images = {
             "electron-cash": f"electron-cash:{services['electron-cash']['build']['args']['EC_VERSION']}",
             "tor-proxy": f"bchforge/electron-cash-docker-tor:{services['tor-proxy']['build']['args']['TOR_VERSION']}",
-            "auth-session": "electron-cash-docker-auth-session:0.3",
-            "caddy": "electron-cash-docker-caddy:0.3",
-            "fail2ban": "electron-cash-docker-fail2ban:0.3",
+            "auth-session": "electron-cash-docker-auth-session:1.0",
+            "caddy": "electron-cash-docker-caddy:1.0",
+            "fail2ban": "electron-cash-docker-fail2ban:1.0",
         }
         assert image_refs == expected_images, "first install did not resolve the documented local product image tags"
-        assert "BUILDX_BUILDER" not in environment and "CI_CANDIDATE_IMAGES" not in environment
+        assert "CI_CANDIDATE_IMAGES" not in environment
+        # Global absence of the public tags is not a valid prerequisite: a
+        # maintainer may have the accepted baseline running. Never overwrite or
+        # delete it. Verify those defaults above, then change ONLY tag names in
+        # the disposable dotenv and prove the fully resolved service model is
+        # otherwise identical. All real Dockerfiles/services remain in use.
+        default_services = services
+        tag_variables = dict(zip(SERVICES, IMAGE_VARIABLES))
+        image_refs = {name: f"electron-cash-first-install-{name}:{uuid.uuid4().hex}" for name in SERVICES}
+        variables = {tag_variables[name]: reference for name,reference in image_refs.items()}
+        lines = []
+        for line in env_file.read_text().splitlines():
+            key = line.partition('=')[0]
+            lines.append(f"{key}={variables.pop(key)}" if key in variables else line)
+        lines.extend(f"{key}={value}" for key,value in variables.items())
+        env_file.write_text('\n'.join(lines)+'\n')
+        resolved = run([*compose, "config", "--format", "json"], env=environment)
+        assert resolved.returncode == 0
+        model = json.loads(resolved.stdout)
+        services = model['services']
+        assert {name:service['image'] for name,service in services.items()} == image_refs
+        for name in SERVICES:
+            assert {k:v for k,v in default_services[name].items() if k!='image'} == {
+                k:v for k,v in services[name].items() if k!='image'}, f"first-install weakened {name} defaults"
         for image in image_refs.values():
             existing = run(["docker", "image", "inspect", "--format", "{{.Id}}", image], env=environment)
             if existing.returncode == 0:
                 report_infrastructure_blocker(
                     "CACHED_DEFAULT_PRODUCT_IMAGE",
-                    f"cold public install cannot be proved while the unowned default image exists: {image}; "
+                    f"cold install task tag unexpectedly exists: {image}; "
                     "it was left untouched",
                 )
             if "no such image" not in existing.stderr.lower():
@@ -191,7 +218,7 @@ def main() -> None:
         engine = run(["docker", "version", "--format", "{{.Server.Version}}"], env=environment)
         compose_version = run(["docker", "compose", "version", "--short"], env=environment)
         root = run(["docker", "info", "--format", "{{.DockerRootDir}}"], env=environment)
-        for label, result in (("context", context), ("default Buildx builder", builder),
+        for label, result in (("context", context), ("owned Buildx builder", builder),
                               ("Docker Engine", engine), ("Docker Compose", compose_version),
                               ("Docker storage", root)):
             if result.returncode != 0:
@@ -212,9 +239,9 @@ def main() -> None:
         build_started = False
         browser_password = password
         try:
-            # Run the two documented public install commands against genuinely
-            # absent default image tags, with only isolated project/volume names
-            # and loopback ports added for this acceptance run.
+            # Run real Compose build/start against genuinely absent task tags,
+            # using the canonical owned builder and identical public defaults.
+            # The gate separately rebuilds every candidate with --no-cache.
             build_started = True
             built = run([*compose, "build"], env=environment, timeout=1800)
             if built.returncode != 0:
@@ -244,6 +271,8 @@ def main() -> None:
             assert hashlib.sha256(example.read_bytes()).hexdigest() == example_hash
 
             containers = {service: wait_healthy(compose, service, environment) for service in SERVICES}
+            from test_runtime import assert_hardening
+            assert_hardening(containers)
             image_ids = {}
             for service, reference in image_refs.items():
                 inspected = run(["docker", "image", "inspect", "--format", "{{.Id}}", reference], env=environment)
@@ -287,7 +316,7 @@ def main() -> None:
             browser = run([sys.executable, str(ROOT / "tests/test_auth_browser.py")],
                           env=browser_env, timeout=600)
             assert browser.returncode == 0 and password not in browser.stdout + browser.stderr
-            print("PASS public Compose cold browser install, login/RFB, warm start, stop/start, "
+            print("PASS public-default Compose cold browser install in owned image namespace, login/RFB, warm start, stop/start, "
                   "recreate and persistent mainnet state", flush=True)
         finally:
             if build_started:

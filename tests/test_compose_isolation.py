@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import copy
 from pathlib import Path
 
 
@@ -14,7 +15,7 @@ from compose_guard import UnsafeComposeModel, validate_resolved_model  # noqa: E
 
 
 def model(*, wallet: str, tor: str, network: str, image: str, external: bool = False, host: bool = False) -> dict:
-    return {
+    document = {
         "name": "bchforge-v021-test",
         "services": {
             "electron-cash": {
@@ -31,6 +32,7 @@ def model(*, wallet: str, tor: str, network: str, image: str, external: bool = F
             },
             "auth-session": {
                 "image": "auth-session-ci:run",
+                "volumes": [{"type":"volume","source":"auth-session-data","target":"/auth-data"}],
                 "environment": {
                     "BASIC_AUTH_PASSWORD": "synthetic-auth-secret",
                 },
@@ -76,9 +78,18 @@ def model(*, wallet: str, tor: str, network: str, image: str, external: bool = F
             "fail2ban-state": {"name": "bchforge-v021-test_fail2ban-state"},
             "caddy-ban-state": {"name": "bchforge-v021-test_caddy-ban-state"},
             "caddy-control": {"name": "bchforge-v021-test_caddy-control"},
+            "auth-session-data": {"name": "bchforge-v021-test_auth-session-data"},
         },
         "networks": {"electron-network": {"name": network}},
     }
+    document['volumes']['gui-session-state'] = {'name': 'bchforge-v021-test_gui-session-state'}
+    for name, service in document['services'].items():
+        service.setdefault('volumes', []).append({'type': 'volume', 'source': 'gui-session-state',
+            'target': '/run/ecd-gui-session', 'read_only': name != 'electron-cash'})
+        if name != 'electron-cash':
+            service['volumes'].append({'type': 'bind', 'source': str(ROOT/'docker/gui-session.sh'),
+                'target': '/usr/local/bin/gui-session', 'read_only': True, 'bind': {'create_host_path': False}})
+    return document
 
 
 def validate(document: dict) -> None:
@@ -96,6 +107,17 @@ def validate(document: dict) -> None:
     )
 
 def main() -> None:
+    base=model(wallet='bchforge-v021-test-wallet',tor='bchforge-v021-test-tor',network='bchforge-v021-test-network',image='electron-cash-ci:run')
+    for kind in ('foreign','alias','readonly','other-service','external'):
+        broken=copy.deepcopy(base)
+        if kind=='foreign':broken['volumes']['auth-session-data']['name']='foreign-auth-data'
+        elif kind=='alias':broken['volumes']['caddy-data']['name']=broken['volumes']['auth-session-data']['name']
+        elif kind=='readonly':broken['services']['auth-session']['volumes'][0]['read_only']=True
+        elif kind=='other-service':broken['services']['electron-cash']['volumes'].append({'type':'volume','source':'auth-session-data','target':'/auth-data'})
+        else:broken['volumes']['auth-session-data']['external']=True
+        try:validate(broken)
+        except UnsafeComposeModel:pass
+        else:raise AssertionError('unsafe authentication storage accepted: '+kind)
     validate(
         model(
             wallet="bchforge-v021-test-wallet",
@@ -104,6 +126,13 @@ def main() -> None:
             image="electron-cash-ci:run",
         )
     )
+    production_project = model(
+        wallet="bchforge-v021-test-wallet",
+        tor="bchforge-v021-test-tor",
+        network="bchforge-v021-test-network",
+        image="electron-cash-ci:run",
+    )
+    production_project["name"] = "electron-cash-docker"
     for broken in (
         model(
             wallet="bchforge-electron-cash-data",
@@ -111,6 +140,13 @@ def main() -> None:
             network="bchforge-v021-test-network",
             image="electron-cash-ci:run",
         ),
+        model(
+            wallet="bchforge-v021-test-wallet",
+            tor="bchforge-electron-cash-tor-data",
+            network="bchforge-v021-test-network",
+            image="electron-cash-ci:run",
+        ),
+        production_project,
         model(
             wallet="bchforge-v021-test-wallet",
             tor="bchforge-v021-test-tor",

@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:0.3")
+IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:1.0")
 FILTER = ROOT / "docker/fail2ban/filter.d/caddy-basicauth.conf"
 
 
@@ -36,6 +36,9 @@ def main() -> None:
                 (
                     record(401, client_ip="198.51.100.20"),
                     record(401, client_ip="2001:db8::20"),
+                    record(401, client_ip="198.51.100.21", uri="/auth/login?next=/auth/gui-session"),
+                    record(401, client_ip="198.51.100.30", uri="/auth/gui-session"),
+                    record(401, client_ip="198.51.100.31", uri="/auth/gui-session?probe=1"),
                     record(200, client_ip="198.51.100.20"),
                     record(401, client_ip=None, uri="/fake-203.0.113.123"),
                     "not-json 401 client_ip=203.0.113.123",
@@ -71,12 +74,13 @@ def main() -> None:
         )
         output = result.stdout + result.stderr
         assert result.returncode == 0, output
-        assert re.search(r"Failregex:\s+2 total", output), output
+        assert re.search(r"Failregex:\s+3 total", output), output
         matched = output.split("|- Matched line(s):", 1)[-1].split("|- Missed line(s):", 1)[0]
         assert "203.0.113.123" not in matched, output
+        assert "198.51.100.21" in matched and "198.51.100.30" not in matched and "198.51.100.31" not in matched, output
     adapter = (ROOT / "docker/fail2ban/caddy-log-adapter.py").read_text(encoding="utf-8")
     assert "parsed_address != remote" in adapter
-    print("PASS fail2ban-regex Caddy client_ip positive, negative, and spoof fixtures")
+    print("PASS fail2ban-regex client_ip/spoof checks, passive stale-cookie non-ban and unchanged login enforcement")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("CADDY_IMAGE", "electron-cash-docker-caddy:0.3")
+IMAGE = os.environ.get("CADDY_IMAGE", "electron-cash-docker-caddy:1.0")
 
 
 def run(command: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess[str]:

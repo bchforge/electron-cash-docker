@@ -457,7 +457,7 @@ def platform_targets(scope: str, machine: str | None = None) -> dict[str, str]:
 def prepare_platform_images(scope: str, compose: list[str], platform_override: Path,
                            image_platforms: dict[str, str], env: dict[str, str],
                            owner_token: str, claims: list[dict[str, Any]],
-                           owner_registry: Path) -> tuple[dict[str, str], dict[str, str]]:
+                           owner_registry: Path, automation: Any = None) -> tuple[dict[str, str], dict[str, str]]:
     """Resolve content-addressed build tags and identify reusable local images."""
     resolved_compose = json.loads(checked([*compose, "config", "--format", "json"], env=env, timeout=30))
     build_compose_files = [ROOT / "docker-compose.yml", ROOT / "docker-compose.gui.yml"]
@@ -471,6 +471,8 @@ def prepare_platform_images(scope: str, compose: list[str], platform_override: P
     tor_build = ci_validation.image_build_configuration(
         resolved_compose, "tor-proxy", env["TOR_IMAGE"], variant="tor-proxy",
         compose_files=build_compose_files)
+    if automation is not None:
+        automation.build_inputs({"electron-cash": ec_build, "tor-proxy": tor_build})
     image_refs = {
         "electron-cash": f"electron-cash-platform:{ec_build['configuration_sha256'][:32]}",
         "tor-proxy": f"bchforge/electron-cash-docker-tor-platform:{tor_build['configuration_sha256'][:32]}",
@@ -860,19 +862,20 @@ def cleanup_task_resources(project: str, owner_token: str, claims: list[dict[str
 
 
 def wait_window(display: str, timeout: int,
-                relay: x11_relay.ForwardedX11Relay | None = None) -> str:
+                relay: x11_relay.ForwardedX11Relay | None = None,
+                env: dict[str, str] | None = None) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if relay is not None:
             relay.check()
-        result = command_result(["xwininfo", "-display", display, "-root", "-tree"], check=False, timeout=10)
+        result = command_result(["xwininfo", "-display", display, "-root", "-tree"], env=env, check=False, timeout=10)
         match = re.search(r'^\s*(0x[0-9a-fA-F]+)\s+.*Electron Cash', result.stdout, re.MULTILINE)
         if result.returncode == 0 and match:
             return match.group(1)
         time.sleep(1)
-    server = command_result(["xdpyinfo", "-display", display], timeout=10, check=False)
+    server = command_result(["xdpyinfo", "-display", display], env=env, timeout=10, check=False)
     windows = command_result(["xwininfo", "-display", display, "-root", "-tree"],
-                             timeout=10, check=False)
+                             env=env, timeout=10, check=False)
     server_state = "reachable" if server.returncode == 0 else server.stderr.strip()[-500:]
     window_state = windows.stdout.strip()[-1500:] or windows.stderr.strip()[-500:] or "unavailable"
     raise RunnerError("Electron Cash window was not observed; live X11 state: "
@@ -915,13 +918,15 @@ def report_platform_result(scope: str, cleanup_result: dict[str, Any],
     return 0
 
 
-def run_platform(scope: str, timeout: int) -> int:
+def run_platform(scope: str, timeout: int, automation: Any = None) -> int:
     if scope not in SCOPES:
         raise RunnerError(f"unsupported platform scope: {scope}")
     environment_info, display = detect_host(scope)
+    if automation is not None:
+        automation.host(environment_info)
     docker_root = checked(["docker", "info", "--format", "{{.DockerRootDir}}"])
     ci_validation.configure_disk_storage_paths(docker_root.strip())
-    env_file = ENV_LOCAL if scope == "mac-xquartz" else ENV_EXAMPLE
+    env_file = Path(os.environ.get("ECD_MAC_ENV_FILE", str(ENV_LOCAL))) if scope == "mac-xquartz" else ENV_EXAMPLE
     pins = dotenv(env_file)
     approved = dotenv(ENV_EXAMPLE)
     for name in ("EC_VERSION", "EC_COMMIT", "EC_ARCHIVE_SHA256", "TOR_VERSION", "TOR_SOURCE_SHA256"):
@@ -947,6 +952,11 @@ def run_platform(scope: str, timeout: int) -> int:
     claims = [docker_ownership.reserve_claim("project", project, owner_token),
               docker_ownership.reserve_claim("volume", wallet, owner_token),
               docker_ownership.reserve_claim("volume", tor_volume, owner_token)]
+    # Compose validates every declared volume, including GUI session volumes
+    # that the XQuartz mount override does not attach to the wallet.
+    claims.extend(docker_ownership.reserve_claim("volume", project + "_" + name, owner_token)
+                  for name in ("auth-session-data", "gui-session-state", "x11-authority", "caddy-data",
+                               "caddy-config", "caddy-log", "fail2ban-state", "caddy-ban-state", "caddy-control"))
     preexisting_image_ids = set(checked(["docker", "image", "ls", "-aq", "--no-trunc"]).splitlines())
     builder, builder_lock, builder_record = ci_validation.ensure_task_buildx_builder(
         report_dir=ci_validation.task_builder_record_path().parent, manifest=None, log_path=None)
@@ -1011,7 +1021,8 @@ def run_platform(scope: str, timeout: int) -> int:
                "TOR_IMAGE": tor_image, "ECD_WALLET_VOLUME": wallet, "ECD_TOR_VOLUME": tor_volume,
                 "NETWORK": "chipnet", "USE_TOR": "true", "CASHFUSION_ENABLED": "true",
                 "BASIC_AUTH_PASSWORD": uuid.uuid4().hex,
-                "WALLET_AUTO_CREATE": "false", "TEST_WALLET_PASSWORD": "", "JSONRPC_ENABLED": "false",
+                "WALLET_AUTO_CREATE": "true" if automation is not None else "false",
+                "TEST_WALLET_PASSWORD": "", "JSONRPC_ENABLED": "false",
                 "JSONRPC_USER": "platform-test", "JSONRPC_PASSWORD": "",
                 "ELECTRONCASH_ARGS": "",
                 "CI_RESOURCE_OWNER": owner_token, "ECD_TEST_RESOURCE_OWNER": owner_token,
@@ -1026,6 +1037,9 @@ def run_platform(scope: str, timeout: int) -> int:
                   "ECD_PLATFORM_OVERRIDE": str(platform_override)}
         env.update({name: pins[name] for name in
                     ("EC_VERSION", "EC_COMMIT", "EC_ARCHIVE_SHA256", "TOR_VERSION", "TOR_SOURCE_SHA256")})
+        if automation is not None:
+            automation.restart_control = task_tmp / "restart-request"
+            env["ECD_MAC_RESTART_CONTROL"] = str(automation.restart_control)
         for name, value in approved.items():
             if name.startswith("CASHFUSION_"):
                 env[name] = value
@@ -1042,14 +1056,15 @@ def run_platform(scope: str, timeout: int) -> int:
         compose = compose_args(scope, project, env_file, platform_override)
         if scope == "mac-xquartz":
             # mac-gui.sh consumes the local .env and the same exported isolated image/volume names.
-            build_prefix = ["docker", "compose", "--project-directory", str(ROOT), "--env-file", str(ENV_LOCAL),
+            build_prefix = ["docker", "compose", "--project-directory", str(ROOT), "--env-file", str(env_file),
                             "-p", project, "-f", str(ROOT / "docker-compose.yml"),
                             "-f", str(platform_override)]
         else:
             build_prefix = compose
 
         image_refs, reusable_images = prepare_platform_images(
-            scope, compose, platform_override, image_platforms, env, owner_token, claims, owner_registry)
+            scope, compose, platform_override, image_platforms, env, owner_token, claims, owner_registry,
+            **({"automation": automation} if automation is not None else {}))
         ec_image = image_refs["electron-cash"]
         tor_image = image_refs["tor-proxy"]
 
@@ -1104,8 +1119,14 @@ def run_platform(scope: str, timeout: int) -> int:
                 admit_platform_phase(f"real {scope} image {service_name}", service_budget)
                 env["CI_DISK_START_BYTES"] = str(service_budget)
                 build_command = [*build_prefix, "build", "--pull", service_name]
-                ci_validation.checked(build_command, env=env, timeout=1800,
-                                      disk_floor_bytes=ci_validation.DISK_FLOOR_BYTES)
+                try:
+                    ci_validation.checked(build_command, env=env, timeout=7200,
+                                          disk_floor_bytes=ci_validation.DISK_FLOOR_BYTES)
+                except subprocess.TimeoutExpired as error:
+                    output = (error.output or b"") + (error.stderr or b"")
+                    if isinstance(output, bytes):
+                        output = output.decode(errors="replace")
+                    raise RunnerError(f"image build timed out; last output: {output[-6000:]}") from error
                 image_id = checked(["docker", "image", "inspect", "--format", "{{.Id}}", image_ref],
                                    env=env).strip()
                 image_claim["expected_id"] = image_id
@@ -1217,8 +1238,10 @@ def run_platform(scope: str, timeout: int) -> int:
             inspect = json.loads(checked(["docker", "inspect", container]))[0]
             host_config = inspect["HostConfig"]
             if (host_config.get("PortBindings") or host_config.get("Privileged") or
-                    host_config.get("CapAdd")):
-                raise RunnerError("native GUI exposed a host port or privileged container")
+                    {cap.removeprefix("CAP_") for cap in host_config.get("CapAdd") or []} !=
+                    {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}):
+                raise RunnerError(f"native GUI container policy mismatch: ports={host_config.get('PortBindings')} "
+                                  f"privileged={host_config.get('Privileged')} caps={host_config.get('CapAdd')}")
             devices = host_config.get("Devices") or []
             device_rules = host_config.get("DeviceCgroupRules") or []
             if scope != "ledger-linux" and (devices or device_rules):
@@ -1245,7 +1268,9 @@ def run_platform(scope: str, timeout: int) -> int:
             observation = capture_window(host_display, window, os.environ.copy(), screenshot)
             print(f"[platform] Electron Cash rendered {observation['width']}x{observation['height']} "
                   f"on window {observation['window_id']}", flush=True)
-            if scope == "mac-xquartz":
+            if automation is not None:
+                automation.interact(host_display, window, container, tor, image_ids, image_platforms)
+            elif scope == "mac-xquartz":
                 print("Electron Cash has been detected in XQuartz. The application will remain open for "
                       "inspection. Please check whether you can see the window.", flush=True)
             elif environment_info.get("display_transport") == "ssh-x11-forwarding":
@@ -1254,7 +1279,10 @@ def run_platform(scope: str, timeout: int) -> int:
             else:
                 print("[operator action] Confirm Electron Cash is visible and responsive on the host desktop; "
                       "click/focus it, then close its window normally.", flush=True)
+            exit_deadline = time.monotonic() + timeout
             while process.poll() is None:
+                if time.monotonic() > exit_deadline:
+                    raise RunnerError("native GUI did not exit before the bounded deadline")
                 if relay is not None:
                     relay.check()
                 state = json.loads(checked(["docker", "inspect", container]))[0]["State"]
@@ -1321,6 +1349,8 @@ def run_platform(scope: str, timeout: int) -> int:
                     raise RunnerError("XQuartz running state was not restored")
                 before_listener = environment_info.get("nolisten_tcp_before")
                 after_listener = command_result(["defaults", "read", "org.xquartz.X11", "nolisten_tcp"], check=False).stdout.strip() or None
+                if before_listener == "unset":
+                    after_listener = after_listener or "unset"
                 if before_listener != after_listener:
                     raise RunnerError("XQuartz TCP preference was not restored")
                 after_access = xhost_access_fingerprint()
@@ -1391,6 +1421,8 @@ def run_platform(scope: str, timeout: int) -> int:
                     "after real-platform cleanup")
             cleanup_display_transport()
             atexit.unregister(cleanup_display_transport)
+            if automation is not None:
+                automation.cleanup(cleanup_result, environment_info, result_error or not_run_error)
         return report_platform_result(scope, cleanup_result, not_run_error, result_error,
                                       image_ids, image_platforms)
 

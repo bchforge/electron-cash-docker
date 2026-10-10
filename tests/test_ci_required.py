@@ -32,12 +32,12 @@ def main() -> None:
     required_product_paths = {
         "test_first_install.py", "test_network_lifecycle_e2e.py", "test_linux_gui.py",
         "test_persistence.py", "test_ledger.py", "test_mac_gui.py",
-        "test_integrity_pins.py", "test_compose_build_policy.py",
+        "test_integrity_pins.py", "test_compose_build_policy.py", "test_runtime.py",
     }
     assert required_product_paths <= set(ci.MANDATORY_ACCEPTANCE_TESTS)
     ci.validate_mandatory_acceptance_registration()
     for required in ("test_first_install.py", "test_network_lifecycle_e2e.py", "test_linux_gui.py",
-                     "test_persistence.py", "test_ledger.py", "test_mac_gui.py"):
+                      "test_persistence.py", "test_ledger.py", "test_mac_gui.py", "test_runtime.py"):
         missing = [name for name in ci.ACCEPTANCE_TESTS if name != required]
         try:
             ci.validate_mandatory_acceptance_registration(missing)

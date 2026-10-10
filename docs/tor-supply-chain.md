@@ -1,19 +1,18 @@
 # Tor Supply Chain
 
-The BCH Forge-maintained Tor source build was introduced in v0.1.2 and is
-retained in v0.1.3. Electron Cash Docker builds its Tor proxy locally from the
+Electron Cash Docker builds its BCH Forge-maintained Tor proxy locally from the
 official Tor Project source release; the repository does not consume a
 third-party Tor container image.
 
 ## Upstream And Pins
 
 - Authority: [Tor source download page](https://www.torproject.org/download/tor/)
-- Release announcement: [Tor 0.4.9.11](https://forum.torproject.org/t/security-release-0-4-9-11/21786)
-- Source archive: `https://dist.torproject.org/tor-0.4.9.11.tar.gz`
-- Signed checksum: `https://dist.torproject.org/tor-0.4.9.11.tar.gz.sha256sum`
-- Signature: `https://dist.torproject.org/tor-0.4.9.11.tar.gz.sha256sum.asc`
-- Tor version: `0.4.9.11`
-- Source SHA-256: `2e6c1720118c812acf0079fd47cf91b6bfaba5d766c321c4d3d2a28d6a11a8ed`
+- Release announcement: [Tor 0.4.9.14](https://forum.torproject.org/t/security-release-0-4-9-14/22241)
+- Source archive: `https://dist.torproject.org/tor-0.4.9.14.tar.gz`
+- Signed checksum: `https://dist.torproject.org/tor-0.4.9.14.tar.gz.sha256sum`
+- Signature: `https://dist.torproject.org/tor-0.4.9.14.tar.gz.sha256sum.asc`
+- Tor version: `0.4.9.14`
+- Source SHA-256: `182449ac1c8ff43278da27b69b02040e11d03d0327db6d9126e4190ec6235e4a`
 
 The SHA-256 value is maintained in `.env.example` as `TOR_SOURCE_SHA256` and
 is passed to the Tor Docker build as a required argument. The build downloads
@@ -21,6 +20,17 @@ the exact-version archive and checksum files from `dist.torproject.org`,
 verifies the checksum file with `gpgv`, checks the expected signer fingerprints,
 then verifies the archive against both the signed checksum and the configured
 SHA-256 value.
+
+After archive/signature verification, `docker/tor/signal-mask-compat.py` checks
+the exact `sandbox.c` SHA-256 and applies one scoped compatibility correction.
+It enables the existing `rt_sigprocmask(SIG_BLOCK)` predicate for glibc's
+worker-thread mask save/restore sequence. Without it, a denied save can be
+followed by restoring uninitialized mask bytes, leaving SIGTERM blocked.
+The script fails closed if the pinned source or expected block differs.
+`Sandbox=1`, the upstream archive pin, all other filter predicates and zero
+runtime capabilities are preserved. This local source correction is included
+in the candidate/image input identity; the binary is not claimed to be an
+unmodified upstream build.
 
 ## Release Authority
 
@@ -68,8 +78,10 @@ consult the network or a keyserver during the build.
 
 ## Runtime Boundary
 
-`tor-proxy` is the stack's standalone Tor service with an independent lifecycle
-from Electron Cash. Electron Cash's SPV path and the CashFusion plugin
+`tor-proxy` is the stack's standalone Tor service. In the default browser
+project, intentional GUI Quit/last-window close also stops this exclusively
+GUI-owned sibling. Independent headless/RPC projects retain independent
+lifetimes. Electron Cash's SPV path and the CashFusion plugin
 explicitly consume its `tor-proxy:9050` SOCKS endpoint. Future components may
 reuse the service only when explicitly configured. It is not a transparent
 network gateway, so unrelated container, host, browser, or wallet-volume
@@ -91,7 +103,8 @@ There is no ControlPort, HTTP proxy, DNS proxy, transparent proxy, relay,
 directory port, bridge relay, onion service, Nyx, or Lyrebird. Compose uses
 `expose`, not `ports`, so 9050 is not published on the host. The healthcheck
 performs a local SOCKS5 greeting against `127.0.0.1:9050`; it never contacts an
-external website. End-to-end tests separately wait for Tor's `Bootstrapped
+external website. It checks the real Tor process as PID 1 or as the direct
+child of the GUI lifecycle supervisor. End-to-end tests separately wait for Tor's `Bootstrapped
 100%` message and verify a Tor-routed connection through the internal endpoint.
 
 The Tor source `LICENSE` is copied into the runtime image at
@@ -105,7 +118,7 @@ those upstream obligations.
 docker compose --env-file .env.example config
 docker compose --env-file .env.example build tor-proxy
 docker run --rm --entrypoint /usr/local/bin/tor \
-  bchforge/electron-cash-docker-tor:0.4.9.11 --version
+  bchforge/electron-cash-docker-tor:0.4.9.14 --version
 docker compose --env-file .env.example up -d
 docker compose --env-file .env.example logs tor-proxy
 ```
@@ -115,7 +128,7 @@ wrong:
 
 ```bash
 docker build --target tor-verifier \
-  --build-arg TOR_VERSION=0.4.9.11 \
+  --build-arg TOR_VERSION=0.4.9.14 \
   --build-arg TOR_SOURCE_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
   ./docker/tor
 ```

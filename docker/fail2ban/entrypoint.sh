@@ -29,7 +29,7 @@ PY
 
 mkdir -p /var/lib/fail2ban
 touch /var/lib/fail2ban/access.log
-cat > /etc/fail2ban/jail.local <<EOF
+cat > /etc/fail2ban/jail.d/ecd.local <<EOF
 [DEFAULT]
 backend = auto
 ignoreip = ${IGNOREIP}

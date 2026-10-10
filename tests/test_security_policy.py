@@ -30,7 +30,7 @@ KNOWN = {
 
 
 def test_exact_known_exception_is_accepted() -> None:
-    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 9, 15))
+    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 10, 9))
     assert vulnerability_exception_match(KNOWN, "source", exceptions) is not None
     with tempfile.TemporaryDirectory(prefix="security-policy-") as temporary:
         report_dir = Path(temporary)
@@ -42,14 +42,14 @@ def test_exact_known_exception_is_accepted() -> None:
 
 
 def test_changed_version_and_scope_do_not_match() -> None:
-    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 9, 15))
+    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 10, 9))
     changed = dict(KNOWN, InstalledVersion="0.19.0")
     assert vulnerability_exception_match(changed, "source", exceptions) is None
     assert vulnerability_exception_match(KNOWN, "image:tor", exceptions) is None
 
 
 def test_unknown_no_fix_and_fixable_findings_fail() -> None:
-    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 9, 15))
+    exceptions = load_vulnerability_exceptions(today=dt.date(2026, 10, 9))
     unknown = dict(KNOWN, VulnerabilityID="CVE-2099-0001")
     fixed = dict(KNOWN, FixedVersion="0.20.0")
     for finding in (unknown, fixed):

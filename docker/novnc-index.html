@@ -6,6 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <title>Electron Cash Docker</title>
+  <script src="/novnc-session.js"></script>
   <style>
     :root { --bg: #0f1419; --card: #1a1f2e; --border: #2a3142; --text: #e8e8e8; --muted: #8b95a7; --accent: #4ade80; }
     * { box-sizing: border-box; }
@@ -30,15 +31,15 @@
 <body>
   <main>
     <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#0f1419" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg></div>
-     <h1>Electron Cash Docker</h1>
-    <p>Bitcoin Cash wallet &middot; Tor-routed SPV</p>
+     <h1><bdi dir="ltr">Electron Cash Docker</bdi></h1>
+    <p data-ecd-copy="SUBTITLE">Bitcoin Cash wallet &middot; Tor-routed SPV</p>
     <form method="post" action="/auth/login">
-       <label for="pass">Password</label>
+       <label for="pass" data-ecd-copy="PASSWORD">Password</label>
       <input id="pass" name="password" type="password" autocomplete="current-password" required>
-      <div class="remember"><input id="remember" name="remember" type="checkbox"><label for="remember">Remember this session</label></div>
-      <button type="submit">Connect</button>
+      <div class="remember"><input id="remember" name="remember" type="checkbox"><label for="remember" data-ecd-copy="REMEMBER">Remember this session</label></div>
+      <button type="submit" data-ecd-copy="CONNECT">Connect</button>
     </form>
-    <footer>noVNC connects after authentication. The password is never stored in this browser.</footer>
+    <footer data-ecd-copy="FOOTER">noVNC connects after authentication. The password is never stored in this browser.</footer>
   </main>
 </body>
 </html>

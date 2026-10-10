@@ -35,16 +35,26 @@ WORKDIR /tmp/electron-cash
 # Build only the pinned secp256k1 submodule used by make_secp. Optional ZBar,
 # OpenSSL, libevent, zlib, and Tor source builds are not enabled in this image;
 # locale data is copied from the separately verified release archive below.
-RUN git clone https://github.com/Electron-Cash/Electron-Cash.git . && \
+RUN git init . && \
+    git remote add origin https://github.com/Electron-Cash/Electron-Cash.git && \
+    for attempt in 1 2 3; do \
+        git fetch --depth=1 origin "${EC_COMMIT}" && break; sleep 2; \
+    done && \
     git checkout --detach "${EC_COMMIT}" && \
     git submodule sync -- contrib/secp256k1 && \
     git submodule update --init -- contrib/secp256k1 && \
-    ./contrib/make_secp
+    GIT_SUBMODULE_SKIP=1 ./contrib/make_secp
 
 COPY docker/electron-cash-cve-2024-23342.patch /tmp/electron-cash-cve-2024-23342.patch
 
 RUN git apply --check /tmp/electron-cash-cve-2024-23342.patch && \
     git apply --whitespace=error /tmp/electron-cash-cve-2024-23342.patch
+
+COPY docker/cashfusion-policy-patch.py /tmp/cashfusion-policy-patch.py
+RUN python3 /tmp/cashfusion-policy-patch.py /tmp/electron-cash
+
+COPY docker/login_catalog.py docker/login_locale.py docker/login-translations.tsv /tmp/ecd-locale/
+RUN PYTHONPATH=/tmp/ecd-locale python3 -c 'import ast,pathlib; from login_catalog import CATALOGS; tree=ast.parse(pathlib.Path("/tmp/electron-cash/electroncash/i18n.py").read_text()); node=next(n for n in tree.body if isinstance(n,ast.AnnAssign) and getattr(n.target,"id",None)=="languages"); codes={ast.literal_eval(k).lower() for k in node.value.keys if ast.literal_eval(k)}; assert set(CATALOGS) == codes, "ECD catalog coverage must match pinned EC"'
 
 RUN curl -fsSL -o /tmp/electron-cash.tar.gz \
         "https://github.com/Electron-Cash/Electron-Cash/releases/download/${EC_VERSION}/electron_cash-${EC_VERSION}.tar.gz" && \
@@ -171,17 +181,29 @@ RUN groupadd --gid 10001 electroncash && \
         > /home/electroncash/.config/openbox/rc.xml && \
     chown -R electroncash:electroncash /home/electroncash
 
+RUN mkdir -p /run/ecd-gui-session && chown 10001:10001 /run/ecd-gui-session && chmod 0755 /run/ecd-gui-session
+
 COPY docker/novnc-index.html /opt/noVNC/index.html
 COPY docker/auth-session/favicon.svg /opt/noVNC/favicon.svg
 COPY docker/novnc-keepalive.js /opt/noVNC/novnc-keepalive.js
+COPY docker/novnc-session.js /opt/noVNC/novnc-session.js
 COPY VERSION /etc/electroncash-docker/VERSION
 
 RUN python3 -c 'from pathlib import Path; path=Path("/opt/noVNC/vnc.html"); text=path.read_text(encoding="utf-8"); marker="<script src=\"/novnc-keepalive.js\"></script>"; assert marker not in text; assert "</head>" in text; path.write_text(text.replace("</head>", "  " + marker + "\n</head>", 1), encoding="utf-8")'
+RUN python3 -c 'from pathlib import Path; p=Path("/opt/noVNC/vnc.html"); t=p.read_text(); p.write_text(t.replace("</head>", "<script src=\"/novnc-session.js\"></script>\n</head>", 1))'
 
 COPY --chown=electroncash:electroncash docker/entrypoint.sh /home/electroncash/entrypoint.sh
 COPY --chown=electroncash:electroncash docker/cashfusion.sh /home/electroncash/cashfusion.sh
 COPY --chown=electroncash:electroncash docker/cashfusion_defaults.py /home/electroncash/cashfusion_defaults.py
+COPY docker/cashfusion_policy.py /home/electroncash/cashfusion_policy.py
+COPY docker/gui_startup.py /home/electroncash/gui_startup.py
+RUN /opt/electroncash-venv/bin/python -c 'import pathlib,site; root=pathlib.Path(site.getsitepackages()[0]); [(root/name).symlink_to("/home/electroncash/"+name) for name in ("cashfusion_defaults.py","cashfusion_policy.py")]'
 COPY --chown=electroncash:electroncash docker/network_selection.py /home/electroncash/network_selection.py
+COPY docker/healthcheck.py /home/electroncash/healthcheck.py
+COPY docker/gui_session.py /home/electroncash/gui_session.py
+COPY docker/login_locale.py /home/electroncash/login_locale.py
+COPY docker/login_catalog.py docker/login-translations.tsv /home/electroncash/
+COPY docker/session-websockify.py /home/electroncash/session-websockify.py
 COPY docker/prepare-xauthority.py /home/electroncash/prepare-xauthority.py
 COPY --chown=electroncash:electroncash docker/backup_tool.py /home/electroncash/backup_tool.py
 COPY --chown=electroncash:electroncash docker/backup.sh /home/electroncash/backup.sh

@@ -6,8 +6,14 @@ services:
   fail2ban:
     profiles: [headless]
   electron-cash:
+    depends_on:
+      tor-proxy:
+        condition: service_started
+    volumes:
+      - gui-session-state:/run/ecd-gui-session:ro
     environment:
       MODE: headless
+      ECD_GUI_SESSION: "false"
       ECD_HEADLESS_OVERLAY: "true"
       JSONRPC_ENABLED: ${JSONRPC_ENABLED:-false}
       JSONRPC_USER: ${JSONRPC_USER:-}
@@ -15,8 +21,12 @@ services:
       JSONRPC_PORT: ${JSONRPC_PORT:-50001}
     ports: !reset []
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'electroncash-daemon-wrapper|electron-cash daemon' > /dev/null"]
+      test: ["CMD", "/opt/electroncash-venv/bin/python", "/home/electroncash/healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+  tor-proxy:
+    depends_on: !reset {}
+    environment:
+      ECD_GUI_SESSION: "false"

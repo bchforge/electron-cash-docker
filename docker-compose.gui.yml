@@ -6,6 +6,14 @@ services:
   fail2ban:
     profiles: [remote-only]
   x11-authority:
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: ${ELECTRON_CASH_IMAGE:-electron-cash:${EC_VERSION:?EC_VERSION must be set in .env}}
     pull_policy: never
     user: "0:0"
@@ -52,10 +60,12 @@ services:
   electron-cash:
     environment:
       MODE: gui
+      ECD_GUI_SESSION: "false"
       ECD_GUI_OVERLAY: "true"
       DISPLAY: ${DISPLAY:?Set DISPLAY to the host X11 display for native GUI}
       XAUTHORITY: /run/ecd-x11/authority
     volumes:
+      - gui-session-state:/run/ecd-gui-session:ro
       - x11-authority:/run/ecd-x11:ro
       - type: bind
         source: ${X11_SOCKET_DIR:-/tmp/.X11-unix}
@@ -66,8 +76,15 @@ services:
     ports: !reset []
     expose: !reset []
     depends_on:
+      tor-proxy:
+        condition: service_started
       x11-authority:
         condition: service_healthy
+
+  tor-proxy:
+    depends_on: !reset {}
+    environment:
+      ECD_GUI_SESSION: "false"
 
 volumes:
   x11-authority:

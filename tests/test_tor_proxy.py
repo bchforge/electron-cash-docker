@@ -393,7 +393,10 @@ def test_runtime() -> None:
             assert inspect["HostConfig"]["NetworkMode"] != "host"
             assert inspect["NetworkSettings"]["Ports"].get("9050/tcp") is None
             targets = {mount["Destination"] for mount in inspect["Mounts"]}
-            assert targets == {"/var/lib/tor"}
+            assert targets == {"/var/lib/tor", "/run/ecd-gui-session", "/usr/local/bin/gui-session"}
+            for mount in inspect["Mounts"]:
+                if mount["Destination"] != "/var/lib/tor":
+                    assert mount["RW"] is False
             assert "/home/electroncash/.electron-cash" not in targets
             assert "/var/run/docker.sock" not in targets
 
@@ -401,6 +404,14 @@ def test_runtime() -> None:
             assert top.returncode == 0, top.stdout + top.stderr
             assert "10001" in top.stdout
             assert "root" not in top.stdout.lower()
+            process_list = run(["docker", "top", tor_container, "-eo", "pid,comm"])
+            assert process_list.returncode == 0
+            tor_pids = [line.split()[0] for line in process_list.stdout.splitlines()[1:]
+                        if line.split()[1] == "tor"]
+            assert len(tor_pids) == 1
+            status = Path("/proc", tor_pids[0], "status").read_text()
+            mask = next(line.split()[1] for line in status.splitlines() if line.startswith("SigBlk:"))
+            assert not int(mask, 16) & (1 << 14), "Tor must receive graceful SIGTERM after worker creation"
 
             version = run(
                 ["docker", "exec", tor_container, "/usr/local/bin/tor", "--version"]

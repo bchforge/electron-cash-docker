@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Prevent runtime banners from regressing to obsolete product versions."""
+"""Require runtime banners to use the image's authoritative product version."""
 
+import re
 from pathlib import Path
 
 
@@ -14,7 +15,8 @@ def test_runtime_version_is_configured() -> None:
     entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
     compose = COMPOSE.read_text(encoding="utf-8")
 
-    assert VERSION.read_text(encoding="utf-8").strip() == "0.4"
+    # The startup contract accepts major.minor; a release bump is not a failure.
+    assert re.fullmatch(r"[0-9]+\.[0-9]+", VERSION.read_text(encoding="utf-8").strip())
     assert "ECD_VERSION_FILE=/etc/electroncash-docker/VERSION" in entrypoint
     assert "ECD_PRODUCT_VERSION=$(tr -d" in entrypoint
     assert 'echo "[*] Starting ${ECD_PRODUCT_VERSION} noVNC wallet"' in entrypoint
@@ -22,8 +24,7 @@ def test_runtime_version_is_configured() -> None:
     assert "ECD_PRODUCT_VERSION" not in compose
     assert "COPY VERSION /etc/electroncash-docker/VERSION" in (ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
     assert "COPY VERSION /etc/electroncash-docker/VERSION" in (ROOT / "docker/auth-session/Dockerfile").read_text(encoding="utf-8")
-    assert "Starting v0.1 noVNC wallet" not in entrypoint
-    assert "Electron Cash Docker v0.2" not in entrypoint
+    assert not re.search(r'Starting v?[0-9]+\.[0-9]+|Electron Cash Docker v[0-9]+\.[0-9]+', entrypoint)
 
 
 def main() -> None:
