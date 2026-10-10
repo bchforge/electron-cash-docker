@@ -61,6 +61,8 @@ def custom_args(raw: str | None) -> list[str]:
         "--electron_cash_path", "--portable", "-P", "--wallet_path", "--wallet", "-w", "--dir", "-D",
     }
     for arg in args:
+        if arg in {"-L", "--lang", "--language"} or arg.startswith(("--lang=", "--language=", "-L")):
+            raise NetworkSelectionError("ELECTRONCASH_ARGS language override is reserved; use EC_LANGUAGE")
         if arg in reserved or any(arg.startswith(flag + "=") for flag in reserved):
             raise NetworkSelectionError(
                 f"ELECTRONCASH_ARGS contains reserved selector/path {arg}; use NETWORK=<network>"

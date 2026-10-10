@@ -16,8 +16,8 @@ EXPECTED_PINS = {
     "NOVNC_VERSION": "1.6.0",
     "NOVNC_COMMIT": "a8dfd6a3ea3c74244f5ebdaa5a7f1023007a7820",
     "NOVNC_ARCHIVE_SHA256": "ebb8eabcd3670ce1a02e4025f03976826c289121cf631183647bd8325b003403",
-    "TOR_VERSION": "0.4.9.11",
-    "TOR_SOURCE_SHA256": "2e6c1720118c812acf0079fd47cf91b6bfaba5d766c321c4d3d2a28d6a11a8ed",
+    "TOR_VERSION": "0.4.9.14",
+    "TOR_SOURCE_SHA256": "182449ac1c8ff43278da27b69b02040e11d03d0327db6d9126e4190ec6235e4a",
 }
 
 
@@ -65,6 +65,7 @@ def test_integrity_metadata_contracts() -> None:
     assert "git submodule sync -- contrib/secp256k1 && \\" in novnc_dockerfile
     assert "git submodule update --init -- contrib/secp256k1 && \\" in novnc_dockerfile
     assert "git submodule update --init --recursive" not in novnc_dockerfile
+    assert "GIT_SUBMODULE_SKIP=1 ./contrib/make_secp" in novnc_dockerfile
     assert "https://codeload.github.com/novnc/noVNC/tar.gz/${NOVNC_COMMIT}" in novnc_dockerfile
     assert "https://github.com/novnc/noVNC/archive/" not in novnc_dockerfile
     tor_dockerfile = (ROOT / "docker/tor/Dockerfile").read_text(encoding="utf-8")
@@ -75,10 +76,12 @@ def test_integrity_metadata_contracts() -> None:
     assert re.search(r'"archive_sha256": "[0-9a-f]{64}"', plugin)
     assert re.search(r'"sha256": "[0-9a-f]{64}"', plugin)
     caddy = (ROOT / "docker/caddy/Dockerfile").read_text(encoding="utf-8")
-    assert "FROM caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648" in caddy
-    assert "FROM golang@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder" in caddy
-    assert "ARG CADDY_VERSION=2.11.4" in caddy
-    assert "ARG CADDY_ARCHIVE_SHA256=2c3d02078286a6282cdb4d1d8744077788d556659dac0b64d8ed5886a7e5aeb9" in caddy
+    assert "FROM caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f" in caddy
+    assert "FROM golang@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS builder" in caddy
+    assert "ARG CADDY_VERSION=2.11.7" in caddy
+    assert "ARG CADDY_ARCHIVE_SHA256=86e39de5fa0bc433a9cd574a00e7751059903401f3389c61f8937fd0ad0180f5" in caddy
+    assert "go build -mod=readonly" in caddy and "go mod verify" in caddy
+    assert "ENV GOTOOLCHAIN=local" in caddy
     assert "libcrypto3=3.5.9-r0" in caddy
     assert "libssl3=3.5.9-r0" in caddy
     fail2ban = (ROOT / "docker/fail2ban/Dockerfile").read_text(encoding="utf-8")
@@ -106,7 +109,7 @@ def test_os_package_specs_are_pinned() -> None:
                 collecting = False
 
 
-def test_v04_pin_repairs_and_ledger_source() -> None:
+def test_current_os_pins_and_ledger_source() -> None:
     dockerfile = (ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
     tor = (ROOT / "docker/tor/Dockerfile").read_text(encoding="utf-8")
     assert dockerfile.count("curl=8.5.0-2ubuntu10.15") == 3
@@ -122,7 +125,7 @@ def main() -> None:
     test_upstream_identity_matches_recorded_contract()
     test_integrity_metadata_contracts()
     test_os_package_specs_are_pinned()
-    test_v04_pin_repairs_and_ledger_source()
+    test_current_os_pins_and_ledger_source()
     print("PASS semantic upstream identity and integrity metadata checks")
 
 

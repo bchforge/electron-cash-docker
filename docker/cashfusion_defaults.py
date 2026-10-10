@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 
@@ -25,6 +26,8 @@ CASHFUSION_ENV_DEFAULTS = {
     "CASHFUSION_SELECTOR_FRACTION": "1.0",
     "CASHFUSION_QUEUED_AUTOFUSE": "4",
     "CASHFUSION_AUTOFUSE_CONFIRMED_ONLY": "true",
+    "CASHFUSION_FEE_BUDGET": "0",
+    "CASHFUSION_MIN_UTXO": "1000",
 }
 
 # This is kept as a separately named profile so callers and documentation can
@@ -60,6 +63,17 @@ _VALID_FUSION_MODES = frozenset(("normal", "consolidate", "fan-out", "custom"))
 _VALID_SELECTOR_MODES = frozenset(("count", "size", "fraction"))
 _SATOSHIS_PER_BCH = Decimal("100000000")
 _MIN_SELECTOR_SIZE_SATOSHIS = 10000
+MAX_POLICY_SATOSHIS = 21000000 * 100000000
+
+
+def _parse_satoshis(name, environment):
+    raw = _environment_value(name, environment).strip()
+    if not re.fullmatch(r'[0-9]+', raw):
+        raise CashFusionConfigurationError(f'{name} must be a non-negative integer in satoshis')
+    value = int(raw, 10)
+    if value > MAX_POLICY_SATOSHIS:
+        raise CashFusionConfigurationError(f'{name} exceeds {MAX_POLICY_SATOSHIS} satoshis')
+    return value
 
 
 def _environment_value(name: str, environment: Mapping[str, str]) -> str:
@@ -193,6 +207,10 @@ def cashfusion_config_from_environment(environment=None) -> dict:
     return {
         "enabled": _parse_bool("CASHFUSION_ENABLED", environment),
         "profile": profile,
+        "limits": {
+            "fee_budget_satoshis": _parse_satoshis("CASHFUSION_FEE_BUDGET", environment),
+            "minimum_input_satoshis": _parse_satoshis("CASHFUSION_MIN_UTXO", environment),
+        },
     }
 
 

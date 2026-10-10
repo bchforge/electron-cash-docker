@@ -183,6 +183,12 @@ def wait_for_daemon(
     command: list[str], environment: dict[str, str], *, chipnet: bool = False
 ) -> None:
     deadline = time.monotonic() + 60
+    # An operator CLI constructs/saves SimpleConfig. Do not let the test itself
+    # race the entrypoint's initial policy/daemon initialization.
+    while '[+] Electron Cash daemon ready' not in run(
+            [*command, 'logs', 'electron-cash'], env=environment).stdout:
+        assert time.monotonic() < deadline, 'headless startup readiness not reached'
+        time.sleep(1)
     while time.monotonic() < deadline:
         result = run(
             [

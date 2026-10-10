@@ -4,6 +4,14 @@ set -eu
 
 fail() { echo "[!] $*" >&2; exit 1; }
 
+# A local image tag never selects or authenticates its compiled Caddy version.
+CADDY_VERSION=${CADDY_VERSION-2.11.7}
+CADDY_ARCHIVE_SHA256=${CADDY_ARCHIVE_SHA256-86e39de5fa0bc433a9cd574a00e7751059903401f3389c61f8937fd0ad0180f5}
+sh /usr/local/bin/caddy-version-check "${CADDY_VERSION}" "${CADDY_ARCHIVE_SHA256}" || fail "invalid Caddy source selection"
+[ "$(cat /etc/caddy/source-version)" = "${CADDY_VERSION}" ] && \
+[ "$(cat /etc/caddy/source.sha256)" = "${CADDY_ARCHIVE_SHA256}" ] && \
+[ "$(caddy version)" = "v${CADDY_VERSION}" ] || fail "Caddy image does not match configured source pin; rebuild Caddy before starting"
+
 SITE_ADDRESS=${CADDY_SITE_ADDRESS:-localhost}
 TLS_MODE=${CADDY_TLS_MODE:-auto}
 ECD_MODE=${ECD_MODE:-novnc}
@@ -97,7 +105,7 @@ rm -f "${ADMIN_SOCKET}"
         '                header_up X-Forwarded-Proto {scheme}' \
         '            }' \
         '        }' \
-        '        @auth_endpoint path /auth/login /auth/logout' \
+        '        @auth_endpoint path /auth/login /auth/logout /auth/gui-session' \
         '        handle @auth_endpoint {' \
         "            reverse_proxy ${AUTH_UPSTREAM} {" \
         '                header_up Host {host}' \

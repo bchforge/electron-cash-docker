@@ -635,7 +635,9 @@ def _ensure_claimed_volume(name: str, claims: list[dict[str, Any]], owner: str, 
 
 def _verified_image_id(image_ref: str, claims: list[dict[str, Any]], owner: str) -> str:
     claim = next((item for item in claims if item.get("kind") == "image" and
-                  item.get("name") == image_ref and item.get("owner_token") == owner and
+                  (item.get("name") == image_ref or
+                   (re.fullmatch(r"sha256:[0-9a-f]{64}", image_ref) and
+                    item.get("expected_id") == image_ref)) and item.get("owner_token") == owner and
                   item.get("preflight") == "ABSENT" and item.get("build_attempted") is True and
                   isinstance(item.get("expected_id"), str) and item.get("expected_id")), None)
     if claim is None and os.environ.get("CI_CANDIDATE_IMAGES") == "1":
@@ -1248,7 +1250,10 @@ def docker_shim_main() -> int:
                 else:
                     action_index = execution_args.index(compose_action)
                     execution_args[action_index + 1:action_index + 1] = ["--pull", "never"]
-                if "--no-build" not in execution_args:
+                # Compose run has no --no-build option. Its exact existing image
+                # is verified by _compose_up_plan and --build/pulls are forbidden
+                # above, so it cannot silently replace the accepted artifact.
+                if compose_action != "run" and "--no-build" not in execution_args:
                     action_index = execution_args.index(compose_action)
                     execution_args[action_index + 1:action_index + 1] = ["--no-build"]
             attached_gui = (compose_action == "up" and args[-1:] == ["electron-cash"] and

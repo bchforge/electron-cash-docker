@@ -12,10 +12,12 @@ done
 docker compose version >/dev/null || { echo "[!] Docker Compose v2 is required" >&2; exit 1; }
 [ -d "${XQUARTZ_APP:-/Applications/Utilities/XQuartz.app}" ] || { echo "[!] install XQuartz first" >&2; exit 1; }
 docker info >/dev/null || { echo "[!] start Docker Desktop first" >&2; exit 1; }
-[ -f "$PROJECT_DIR/.env" ] || { echo "[!] configure $PROJECT_DIR/.env first" >&2; exit 1; }
+mac_env_file=${ECD_MAC_ENV_FILE:-$PROJECT_DIR/.env}
+[ -f "$mac_env_file" ] || { echo "[!] configure $mac_env_file first" >&2; exit 1; }
 export PATH="/opt/X11/bin:$PATH"
 
 preflight_compose=(docker compose --project-directory "$PROJECT_DIR" \
+    --env-file "$mac_env_file" \
     -f "$PROJECT_DIR/docker-compose.yml" -f "$PROJECT_DIR/docker-compose.gui.yml")
 platform_override=${ECD_PLATFORM_OVERRIDE:-}
 if [ -n "$platform_override" ]; then
@@ -56,6 +58,17 @@ if [ -n "$existing_containers" ] || [ -n "$existing_networks" ]; then
 fi
 
 domain=org.xquartz.X11
+test_extensions_changed=false
+test_extensions_original=
+test_extensions_had_setting=false
+if [ "${ECD_X11_AUTOMATION:-0}" = 1 ]; then
+    test_extensions_original=$(defaults read "$domain" enable_test_extensions 2>/dev/null) && test_extensions_had_setting=true || true
+    case "$test_extensions_original" in
+        1|true|TRUE|yes|YES) ;;
+        ''|0|false|FALSE|no|NO) test_extensions_changed=true ;;
+        *) echo "[!] invalid XQuartz enable_test_extensions preference" >&2; exit 1 ;;
+    esac
+fi
 original=$(defaults read "$domain" nolisten_tcp 2>/dev/null) && had_setting=true || { original=; had_setting=false; }
 if [ "$had_setting" = true ]; then
     case "$original" in
@@ -210,6 +223,7 @@ cleanup() {
             echo "[*] Docker resource cleanup is delegated to the owner-checked platform runner."
         else
             local cleanup_compose=(docker compose --project-directory "$PROJECT_DIR" \
+                --env-file "$mac_env_file" \
                 -f "$PROJECT_DIR/docker-compose.yml" -f "$PROJECT_DIR/docker-compose.gui.yml")
             if [ -n "$platform_override" ]; then cleanup_compose+=(-f "$platform_override"); fi
             if [ -n "$mac_overlay" ] && [ -f "$mac_overlay" ]; then cleanup_compose+=(-f "$mac_overlay"); fi
@@ -221,6 +235,14 @@ cleanup() {
         stop_task_xquartz || { stop_ok=false; result=1; }
         restore_ok=true
         restore_tcp_setting || { restore_ok=false; result=1; }
+        if [ "$test_extensions_changed" = true ]; then
+            if [ "$test_extensions_had_setting" = true ]; then
+                defaults write "$domain" enable_test_extensions -bool false || { restore_ok=false; result=1; }
+            else
+                defaults delete "$domain" enable_test_extensions 2>/dev/null || { restore_ok=false; result=1; }
+            fi
+            test_extensions_changed=false
+        fi
         # XQuartz reads this preference at launch, so restart only the detected
         # X11/X11.bin process when the runner changed the TCP setting.
         if [ "$was_running" = true ] && [ "$restore_ok" = true ] && [ "$stop_ok" = true ]; then
@@ -239,6 +261,13 @@ cleanup() {
         # this launcher is eligible for shutdown.
         stop_task_xquartz || result=1
     fi
+    if [ "$test_extensions_changed" = true ]; then
+        if [ "$test_extensions_had_setting" = true ]; then
+            defaults write "$domain" enable_test_extensions -bool false || result=1
+        else
+            defaults delete "$domain" enable_test_extensions 2>/dev/null || result=1
+        fi
+    fi
     if [ -n "$temporary" ]; then rm -rf "$temporary"; fi
     exit "$result"
 }
@@ -246,6 +275,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if [ "$test_extensions_changed" = true ]; then
+    defaults write "$domain" enable_test_extensions -bool true
+    if [ "$original_bool" = false ]; then
+        changed=true
+        if [ "$was_running" = true ]; then stop_task_xquartz; fi
+    fi
+fi
 if [ "$original_bool" = true ]; then
     echo "[*] Temporarily enabling XQuartz TCP; existing XQuartz sessions will restart."
     changed=true
@@ -305,9 +341,11 @@ export DISPLAY=host.docker.internal:0
 mac_overlay=${temporary}/mac-compose.yml
 python3 "$PROJECT_DIR/scripts/mac-compose-overlay.py" "$mac_overlay" "$XAUTHORITY"
 compose=(docker compose --project-directory "$PROJECT_DIR" -f "$PROJECT_DIR/docker-compose.yml" \
+    --env-file "$mac_env_file" \
     -f "$PROJECT_DIR/docker-compose.gui.yml" -f "$mac_overlay")
 if [ -n "$platform_override" ]; then
     compose=(docker compose --project-directory "$PROJECT_DIR" -f "$PROJECT_DIR/docker-compose.yml" \
+        --env-file "$mac_env_file" \
         -f "$PROJECT_DIR/docker-compose.gui.yml" -f "$platform_override" -f "$mac_overlay")
 fi
 if [ -n "$("${compose[@]}" ps -a -q)" ]; then
@@ -316,7 +354,11 @@ fi
 if [ -n "$(docker network ls -q --filter "label=com.docker.compose.project=$resolved_project")" ]; then
     echo "[!] this Compose project already has a network; refusing XQuartz cleanup authority" >&2; exit 1
 fi
-echo "[*] Launching native XQuartz GUI; close the wallet window to stop."
+if [ "${ECD_X11_AUTOMATION:-0}" = 1 ]; then
+    echo "[*] Launching native XQuartz GUI for unattended X11 validation."
+else
+    echo "[*] Launching native XQuartz GUI; close the wallet window to stop."
+fi
 started=true
 if [ "${ECD_PLATFORM_IMAGE_BUILD_DONE:-false}" = true ] || [ "${ECD_PLATFORM_IMAGE_BUILD_DONE:-false}" = 1 ]; then
     "${compose[@]}" up -d --no-build --no-deps tor-proxy
@@ -324,3 +366,13 @@ else
     "${compose[@]}" up -d --build --no-deps tor-proxy
 fi
 "${compose[@]}" up --no-build --no-deps electron-cash
+if [ "${ECD_X11_AUTOMATION:-0}" = 1 ] && [ -n "${ECD_MAC_RESTART_CONTROL:-}" ]; then
+    # Test-only bounded coordination: the first real Quit must be inspected
+    # before restarting the same production Compose wallet with its volume.
+    for ((attempt=0; attempt<60; attempt++)); do
+        [ ! -f "$ECD_MAC_RESTART_CONTROL" ] || break
+        sleep 1
+    done
+    [ -f "$ECD_MAC_RESTART_CONTROL" ] || { echo "[!] restart validation request timed out" >&2; exit 1; }
+    "${compose[@]}" up --no-build --no-deps electron-cash
+fi

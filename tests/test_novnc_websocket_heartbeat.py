@@ -36,7 +36,7 @@ def test_websockify_uses_30_second_heartbeat() -> None:
     command = next(
         line.strip()
         for line in entrypoint.splitlines()
-        if line.strip().startswith("websockify ")
+        if 'session-websockify.py --heartbeat' in line or line.strip().startswith("websockify ")
     )
 
     arguments = shlex.split(command)
@@ -84,10 +84,13 @@ def test_generated_novnc_html_has_clean_keepalive_injection() -> None:
     assert b'<script type="module" crossorigin="anonymous" src="app/error-handler.js"></script>' in html
     assert b'import UI from "./app/ui.js";' in html
     marker = b'<script src="/novnc-keepalive.js"></script>'
+    session_marker = b'<script src="/novnc-session.js"></script>'
     assert html.count(marker) == 1
+    assert html.count(session_marker) == 1
     assert html.count(b"</head>") == 1
-    assert marker + b"\n</head>" in html
-    assert marker + b"\\n</head>" not in html
+    assert marker + b"\n" + session_marker + b"\n</head>" in html
+    assert marker + b"\\n" not in html
+    assert session_marker + b"\\n</head>" not in html
 
 
 def recv_exact(sock: socket.socket, size: int) -> bytes:

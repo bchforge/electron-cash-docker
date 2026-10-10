@@ -33,6 +33,10 @@ import test_disk_budget
 import test_build_reuse
 import test_mac_gui
 import test_ci_required
+import test_docs
+import test_ledger_virtual_harness
+import test_caddy_version
+import test_release_security
 
 
 def main() -> None:
@@ -65,6 +69,10 @@ def main() -> None:
     test_runtime_dependencies.test_manifest_is_exact_runtime_authority()
     test_security_policy.main()
     test_tor_proxy.test_static_provenance()
+    test_docs.main()
+    test_ledger_virtual_harness.main()
+    test_caddy_version.static_main()
+    test_release_security.static_main()
     print("PASS fast static regression checks")
 
 

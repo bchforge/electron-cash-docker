@@ -37,10 +37,12 @@ assert CASHFUSION_DEFAULT_PROFILE == expected
 assert cashfusion_config_from_environment({}) == {
     "enabled": True,
     "profile": expected,
+    "limits": {"fee_budget_satoshis": 0, "minimum_input_satoshis": 1000},
 }
 assert cashfusion_config_from_environment({"CASHFUSION_ENABLED": "true"}) == {
     "enabled": True,
     "profile": expected,
+    "limits": {"fee_budget_satoshis": 0, "minimum_input_satoshis": 1000},
 }
 override_environment = {
     "CASHFUSION_ENABLED": "TRUE",

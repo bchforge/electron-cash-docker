@@ -2,12 +2,11 @@
 """Inspect and record the Electron Cash Docker browser demo.
 
 The demo stack must already be running and configured for CHIPNET. From the
-repository root, regenerate the public demo GIF with:
+repository root, regenerate the demo GIF with a target HTTPS URL:
 
-    python3 scripts/demo.py --mode record \
-      --url https://ecd-demo.bchforge.org/ \
-      --env-file ~/.local/state/electron-cash-docker/demo-ecd-demo-20260923T054928Z/demo.env \
-      --project-name ecd-demo-20260923t054928z \
+    DEMO_URL=https://demo.example.org/ python3 scripts/demo.py --mode record \
+      --env-file ~/.local/state/electron-cash-docker/demo.env \
+      --project-name electron-cash-demo \
       --output docs/assets/electron-cash-docker-demo.gif
 
 The env file stays local; never put its password in the repository. Recording
@@ -27,19 +26,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from mss import MSS
-from PIL import Image, ImageChops
-from playwright.sync_api import sync_playwright
 
-
-DEFAULT_ENV_FILE = Path(
-    "/home/ubuntu/.local/state/electron-cash-docker/"
-    "demo-ecd-demo-20260923T054928Z/demo.env"
-)
-DEFAULT_URL = "https://ecd-demo.bchforge.org/"
-DEFAULT_PROJECT_NAME = "ecd-demo-20260923t054928z"
+DEFAULT_ENV_FILE = Path.home() / ".local" / "state" / "electron-cash-docker" / "demo.env"
+DEFAULT_PROJECT_NAME = "electron-cash-demo"
 DEFAULT_OUTPUT = Path("docs/assets/electron-cash-docker-demo.gif")
-DEFAULT_WORK_DIR = Path("/tmp/ecd-demo-fluid")
+DEFAULT_WORK_DIR = Path("/tmp/electron-cash-demo")
 HIDE_CURSOR_STYLE = """
 #ecd-demo-cursor, .ecd-demo-click-ripple { visibility: hidden !important; }
 """
@@ -279,6 +270,8 @@ def convert_webm_to_gif(
 
 def gif_metadata(path: str | Path) -> dict[str, Any]:
     """Return GIF dimensions, frame count, duration when encoded, and size."""
+    from PIL import Image
+
     gif_path = Path(path)
     with Image.open(gif_path) as image:
         width, height = image.size
@@ -296,6 +289,9 @@ def gif_metadata(path: str | Path) -> dict[str, Any]:
 
 
 def save_screen(name: str, output_dir: Path) -> None:
+    from mss import MSS
+    from PIL import Image
+
     output_dir.mkdir(parents=True, exist_ok=True)
     with MSS() as sct:
         monitor = sct.monitors[1]
@@ -324,7 +320,7 @@ def inspect_page(page) -> None:
     print("BUTTONS:", buttons)
 
 
-def launch_browser(playwright, url: str = DEFAULT_URL):
+def launch_browser(playwright, url: str):
     browser = playwright.chromium.launch(
         headless=False,
         args=[
@@ -344,6 +340,8 @@ def launch_browser(playwright, url: str = DEFAULT_URL):
 
 
 def run_inspection(args) -> None:
+    from playwright.sync_api import sync_playwright
+
     args.work_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as playwright:
         browser, context, page = launch_browser(playwright, args.url)
@@ -475,6 +473,8 @@ def connect_control(page):
 
 
 def screenshot_changed(before: bytes, after: bytes) -> bool:
+    from PIL import Image, ImageChops
+
     with Image.open(BytesIO(before)) as before_image:
         first = before_image.convert("RGB")
     with Image.open(BytesIO(after)) as after_image:
@@ -576,6 +576,8 @@ def record_sequence(page, args) -> None:
 
 
 def record_demo(args) -> None:
+    from playwright.sync_api import sync_playwright
+
     args.work_dir.mkdir(parents=True, exist_ok=True)
     video_dir = args.work_dir / "video"
     video_dir.mkdir(parents=True, exist_ok=True)
@@ -644,13 +646,13 @@ def record_demo(args) -> None:
 def build_parser() -> argparse.ArgumentParser:
     description = "Inspect the Electron Cash Docker demo or record its CHIPNET UI."
     epilog = """Common CHIPNET demo GIF refresh (run from the repository root):
-  python3 scripts/demo.py --mode record --url https://ecd-demo.bchforge.org/ \\
-    --env-file ~/.local/state/electron-cash-docker/demo-ecd-demo-20260923T054928Z/demo.env \\
-    --project-name ecd-demo-20260923t054928z \\
+  DEMO_URL=https://demo.example.org/ python3 scripts/demo.py --mode record \\
+    --env-file ~/.local/state/electron-cash-docker/demo.env \\
+    --project-name electron-cash-demo \\
     --output docs/assets/electron-cash-docker-demo.gif
 
-The demo stack must already be running. The env-file default is a local
-maintainer path; BASIC_AUTH_PASSWORD is never stored by this script.
+The demo stack must already be running. Set DEMO_URL or pass --url explicitly.
+BASIC_AUTH_PASSWORD is never stored by this script.
 """
     parser = argparse.ArgumentParser(
         description=description,
@@ -668,15 +670,17 @@ maintainer path; BASIC_AUTH_PASSWORD is never stored by this script.
         default="inspect",
         help="record the CHIPNET demo or run one of the existing UI inspection routes",
     )
-    parser.add_argument("--url", default=DEFAULT_URL, help="demo base URL")
+    parser.add_argument(
+        "--url", default=os.environ.get("DEMO_URL"), help="HTTPS demo base URL (or set DEMO_URL)"
+    )
     parser.add_argument(
         "--env-file",
         type=Path,
         default=DEFAULT_ENV_FILE,
-        help="local env file containing BASIC_AUTH_PASSWORD (environment overrides it)",
+        help="local env file containing BASIC_AUTH_PASSWORD (default: ~/.local/state/electron-cash-docker/demo.env)",
     )
     parser.add_argument(
-        "--project-name", default=DEFAULT_PROJECT_NAME, help="label in the record summary"
+        "--project-name", default=DEFAULT_PROJECT_NAME, help="running Compose project name"
     )
     parser.add_argument(
         "--output",
@@ -700,6 +704,11 @@ maintainer path; BASIC_AUTH_PASSWORD is never stored by this script.
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if not args.url:
+        parser.error("--url or DEMO_URL is required")
+    url = urlsplit(args.url)
+    if url.scheme != "https" or not url.hostname or url.username or url.password:
+        parser.error("demo URL must use HTTPS, include a host, and contain no embedded credentials")
     if args.fps < 1:
         parser.error("--fps must be at least 1")
     if args.final_hold < 0:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -148,11 +149,76 @@ def test_trivy_host_architecture_pins() -> None:
         raise AssertionError("Trivy archive selection accepted an unpinned host architecture")
 
 
+def test_default_local_daemon_blocks_production_project_and_volumes() -> None:
+    def assert_blocked(labels: str, volumes: str, message: str) -> None:
+        responses = [
+            json.dumps({"Host": "unix:///var/run/docker.sock"}),
+            "server-version",
+            "compose-version",
+            labels,
+            volumes,
+        ]
+        with patch.dict(ci.os.environ, {}, clear=True), patch.object(
+            ci, "checked",
+            side_effect=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, responses.pop(0), ""),
+        ):
+            try:
+                ci.assert_safe_docker_endpoint()
+            except ci.ValidationError as error:
+                assert message in str(error), error
+            else:
+                raise AssertionError("the default local Docker daemon accepted protected production resources")
+
+    assert_blocked(
+        "com.docker.compose.project=electron-cash-docker",
+        "",
+        "production Compose project",
+    )
+    for volume in ("bchforge-electron-cash-data", "bchforge-electron-cash-tor-data"):
+        assert_blocked("com.docker.compose.project=unrelated-project", volume,
+                       "production wallet/Tor volumes")
+
+
+def test_docker_endpoint_guard_allows_local_and_fails_closed() -> None:
+    def run_guard(endpoint: str) -> None:
+        responses = [endpoint, "server-version", "compose-version", "", ""]
+        with patch.dict(ci.os.environ, {}, clear=True), patch.object(
+            ci, "checked",
+            side_effect=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                [], 0, responses.pop(0), ""),
+        ):
+            ci.assert_safe_docker_endpoint()
+        assert not responses
+
+    run_guard(json.dumps({"Host": "unix:///var/run/docker.sock"}))
+
+    for endpoint in (
+        json.dumps({"Host": "tcp://docker.example.test:2376"}),
+        json.dumps({"Host": ""}),
+        json.dumps({}),
+        "[]",
+    ):
+        responses = [endpoint]
+        with patch.dict(ci.os.environ, {}, clear=True), patch.object(
+            ci, "checked",
+            side_effect=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                [], 0, responses.pop(0), ""),
+        ):
+            try:
+                ci.assert_safe_docker_endpoint()
+            except ci.ValidationError as error:
+                assert "local Unix-socket transport" in str(error)
+            else:
+                raise AssertionError(f"unsafe or incomplete Docker endpoint was accepted: {endpoint}")
+
+
 def main() -> None:
     test_buildx_snapshot_context_and_unavailable_backend()
     test_root_filesystem_capacity_portability()
     test_linux_x11_acceptance_stays_in_linux_profile()
     test_trivy_host_architecture_pins()
+    test_default_local_daemon_blocks_production_project_and_volumes()
+    test_docker_endpoint_guard_allows_local_and_fails_closed()
     driver_details = ci._buildx_protection_metadata(
         "Name: ecd-v04-task-acceptance-test\nDriver:          docker-container\nNodes:\n")
     assert driver_details["driver"] == "docker-container"

@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0
+
+- Strengthened security and reliability with tighter container permissions,
+  resource limits, restricted direct access to the remote desktop service, and
+  updates to Caddy, Go, Tor, and supporting dependencies.
+- Added support for all 38 official Electron Cash interface languages plus
+  System, with persistent language preferences.
+- Added English and Spanish user guides, including noVNC keyboard usage and
+  limitations.
+- Completed security and regression validation, documented known limitations,
+  and prepared a reproducible no-funds demonstration.
+- Added configurable CashFusion fee-budget and minimum-UTXO controls
+  (`CASHFUSION_FEE_BUDGET`, `CASHFUSION_MIN_UTXO`).
+- Added persistent web authentication sessions across supported restarts and
+  container recreation.
+- Improved multi-wallet management, allowing independent wallet closure and
+  clean shutdown when the final wallet window closes.
+- Added native light and dark theme selection (`DARK_MODE`).
+
 ## v0.4
 
 - Added native desktop access for Electron Cash on Linux through X11 and on

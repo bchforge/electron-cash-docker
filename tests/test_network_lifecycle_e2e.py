@@ -58,30 +58,44 @@ def main():
             path = BASE if network == "mainnet" else f"{BASE}/{network}"
             config_deadline = time.monotonic() + 30
             config = None
-            last_config_output = ""
+            last_config_keys = []
             while time.monotonic() < config_deadline:
                 config_result = subprocess.run(
                     ["docker", "exec", "--user", "10001:10001", container,
                      "/opt/electroncash-venv/bin/python", "-c",
                      "import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))", path + "/config"],
                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=10)
-                last_config_output = config_result.stdout + config_result.stderr
                 if config_result.returncode == 0:
                     try:
                         candidate_config = json.loads(config_result.stdout)
                     except json.JSONDecodeError:
                         candidate_config = None
+                    if isinstance(candidate_config, dict):
+                        last_config_keys = sorted(candidate_config)
                     if isinstance(candidate_config, dict) and candidate_config.get("proxy") == "socks5:tor-proxy:9050":
                         config = candidate_config
                         break
                 time.sleep(1)
-            assert config is not None, (network, "Tor proxy configuration not initialized", last_config_output)
+            assert config is not None, (network, "Tor proxy configuration not initialized", last_config_keys)
+            # Probe the real local RPC service repeatedly without allowing a
+            # health/readiness check to rewrite preferences or credentials.
+            digest_command = ['docker', 'exec', '--user', '10001:10001', container,
+                '/opt/electroncash-venv/bin/python', '-c',
+                'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())', path+'/config']
+            before_health = checked(digest_command, env=env)
+            checked(['docker', 'exec', '--user', '10001:10001', container,
+                '/opt/electroncash-venv/bin/python', '-c',
+                'import healthcheck; [healthcheck.main() for _ in range(20)]'], env=env)
+            assert checked(digest_command, env=env) == before_health, (network, 'health changed configuration')
             checked(["docker", "exec", "--user", "10001:10001", container,
                      "/opt/electroncash-venv/bin/python", "-c",
                      "import sys;open(sys.argv[1], 'w').write(sys.argv[2])",
                       path + "/.ecd-network-lifecycle-marker", network], env=env)
             inspection = json.loads(checked(["docker", "inspect", container], env=env))[0]
-            assert inspection["Mounts"][0]["Name"] == wallet
+            wallet_mounts = [mount for mount in inspection["Mounts"]
+                             if mount["Destination"] == BASE]
+            assert len(wallet_mounts) == 1
+            assert wallet_mounts[0]["Name"] == wallet and wallet_mounts[0]["RW"] is True
             assert not inspection["HostConfig"]["PortBindings"]
             assert not inspection["HostConfig"]["Privileged"]
             assert inspection["Config"]["Env"].count(f"NETWORK={network}") == 1

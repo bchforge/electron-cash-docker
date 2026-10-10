@@ -10,10 +10,12 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-static bool tor_is_pid_one(void)
+static bool process_is_tor(long pid)
 {
     char command[32] = {0};
-    int fd = open("/proc/1/comm", O_RDONLY | O_CLOEXEC);
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         return false;
     }
@@ -24,7 +26,30 @@ static bool tor_is_pid_one(void)
         return false;
     }
     command[count] = '\0';
-    return strncmp(command, "tor\n", 4) == 0 || strncmp(command, "tor", 3) == 0;
+    return strcmp(command, "tor\n") == 0;
+}
+
+static bool tor_is_owned(void)
+{
+    if (process_is_tor(1)) {
+        return true;
+    }
+    /* GUI mode retains a bounded PID-1 supervisor. Check only its direct
+       children in this container namespace, not arbitrary host processes. */
+    FILE *children = fopen("/proc/1/task/1/children", "r");
+    if (children == NULL) {
+        return false;
+    }
+    long pid;
+    bool found = false;
+    while (fscanf(children, "%ld", &pid) == 1) {
+        if (pid > 1 && process_is_tor(pid)) {
+            found = true;
+            break;
+        }
+    }
+    fclose(children);
+    return found;
 }
 
 static bool read_exact(int fd, unsigned char *buffer, size_t length)
@@ -42,7 +67,7 @@ static bool read_exact(int fd, unsigned char *buffer, size_t length)
 
 int main(void)
 {
-    if (!tor_is_pid_one()) {
+    if (!tor_is_owned()) {
         return EXIT_FAILURE;
     }
 

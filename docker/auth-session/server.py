@@ -4,17 +4,25 @@
 from __future__ import annotations
 
 import hashlib
+import html
+import base64
 import hmac
 import http.server
 import os
 import secrets
+import sqlite3
+import stat
 import threading
 import time
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
+
+from login_locale import login_language
+from login_catalog import CATALOGS, metadata
 
 
 COOKIE_NAME = "ecd_session"
@@ -41,7 +49,7 @@ PRODUCT_VERSION = _product_version()
 
 
 LOGIN_PAGE = """<!doctype html>
-<html lang="en">
+<html lang="{{LANG}}" dir="{{DIR}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -56,7 +64,7 @@ LOGIN_PAGE = """<!doctype html>
     .card { width: min(100%, 28rem); padding: 2.25rem; border: 1px solid var(--border); border-radius: 1.25rem; background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: 0 1.5rem 4rem #0008; }
     .logo { width: 3rem; height: 3rem; display: grid; place-items: center; margin-bottom: 1.25rem; border-radius: .9rem; background: var(--accent); }
     .logo svg { width: 1.75rem; }
-     h1 { margin: 0; font-size: 1.8rem; letter-spacing: -.03em; }
+     h1 { margin: 0; font-size: 1.8rem; letter-spacing: -.03em; direction: ltr; unicode-bidi: isolate; }
      .version { color: var(--muted); font-size: .8em; font-weight: 500; white-space: nowrap; }
      .subtitle { margin: .35rem 0 1.75rem; color: var(--muted); }
     label { display: block; margin: 1rem 0 .35rem; color: var(--muted); font-size: .9rem; }
@@ -74,13 +82,15 @@ LOGIN_PAGE = """<!doctype html>
   <main class="card">
     <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#0f1419" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg></div>
       <h1>Electron Cash Docker <span class="version">&middot; v{{VERSION}}</span></h1>
-      <p class="subtitle">Bitcoin Cash wallet &middot; Tor-routed SPV</p>
+      <p class="subtitle">{{SUBTITLE}}</p>
      {{CONTENT}}
-    <div class="footer">Your session is temporary and the password is never stored in this browser.</div>
+    <div class="footer">{{NOTICE}}</div>
   </main>
 </body>
 </html>
 """
+
+LOGIN_COPY = CATALOGS
 
 
 def _digest(value: str, salt: bytes) -> bytes:
@@ -93,41 +103,103 @@ def _host(value: str) -> str:
 
 
 class SessionStore:
-    def __init__(self, password: str) -> None:
-        self._salt = secrets.token_bytes(16)
-        self._password = _digest(password, self._salt)
-        self._sessions: dict[str, tuple[float, bool]] = {}
-        self._lock = threading.Lock()
+    """Durable opaque-token verifiers; no GUI-generation or wallet dependency."""
+    def __init__(self, password: str, path: str | Path | None = None, *, clock=time.time) -> None:
+        self.path = Path(path or os.environ.get('AUTH_SESSION_DB', '/auth-data/sessions.sqlite'))
+        self.clock = clock
+        directory = self.path.parent
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise RuntimeError('auth-session requires an owner-only persistence directory')
+        new = not self.path.exists() and not self.path.is_symlink()
+        if new:
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+        info = self.path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise RuntimeError('auth-session requires an owner-only regular database')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if new:
+                db.execute('CREATE TABLE credential (id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL, salt BLOB NOT NULL, verifier BLOB NOT NULL)')
+                db.execute('CREATE TABLE sessions (verifier BLOB PRIMARY KEY, created REAL NOT NULL, expires REAL NOT NULL, remember INTEGER NOT NULL CHECK(remember IN (0,1)), generation INTEGER NOT NULL)')
+                salt = secrets.token_bytes(16)
+                db.execute('INSERT INTO credential VALUES (1,1,?,?)', (salt, _digest(password, salt)))
+                db.execute('PRAGMA user_version=1')
+            if db.execute('PRAGMA user_version').fetchone()[0] != 1 or db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                raise RuntimeError('unsupported or corrupt auth-session database')
+            row = db.execute('SELECT generation,salt,verifier FROM credential WHERE id=1').fetchone()
+            if row is None or type(row[0]) is not int or row[0] < 1 or type(row[1]) is not bytes or type(row[2]) is not bytes or len(row[1]) != 16 or len(row[2]) != 32:
+                raise RuntimeError('invalid auth-session credential metadata')
+            generation, salt, verifier = row
+            if not hmac.compare_digest(_digest(password, salt), verifier):
+                generation += 1
+                salt = secrets.token_bytes(16)
+                verifier = _digest(password, salt)
+                db.execute('DELETE FROM sessions')
+                db.execute('UPDATE credential SET generation=?,salt=?,verifier=? WHERE id=1', (generation, salt, verifier))
+            db.execute('DELETE FROM sessions WHERE expires<=?', (self.clock(),))
+            db.execute('SELECT verifier,created,expires,remember,generation FROM sessions LIMIT 0')
+            self._generation, self._salt, self._password = generation, salt, verifier
+
+    @contextmanager
+    def _connect(self):
+        # A fresh connection per operation supports ThreadingHTTPServer safely.
+        # DELETE journal + FULL synchronization are durable SQLite defaults.
+        file = self.path.lstat(); directory = self.path.parent.lstat()
+        if (not stat.S_ISREG(file.st_mode) or file.st_nlink != 1 or file.st_uid != os.geteuid() or stat.S_IMODE(file.st_mode) != 0o600 or
+                not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid() or stat.S_IMODE(directory.st_mode) != 0o700 or
+                not os.access(self.path, os.W_OK) or not os.access(self.path.parent, os.W_OK)):
+            raise RuntimeError('auth-session persistence is not writable')
+        db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=rw', uri=True, timeout=2)
+        try:
+            db.execute('PRAGMA synchronous=FULL')
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def healthy(self) -> bool:
+        with self._connect() as db:
+            return (db.execute('SELECT generation FROM credential WHERE id=1').fetchone() == (self._generation,) and
+                    db.execute('PRAGMA user_version').fetchone()[0] == 1 and db.execute('PRAGMA quick_check').fetchone()[0] == 'ok')
+
+    @staticmethod
+    def _token_verifier(token: str) -> bytes:
+        return hashlib.sha256(token.encode('utf-8')).digest()
 
     def authenticate(self, password: str) -> bool:
-        return hmac.compare_digest(_digest(password, self._salt), self._password)
+        return hmac.compare_digest(_digest(password, self._salt), self._password) and self.healthy()
 
     def create(self, remember: bool) -> tuple[str, int]:
         token = secrets.token_urlsafe(32)
         ttl = REMEMBER_TTL if remember else SESSION_TTL
-        with self._lock:
-            self._sessions[token] = (time.time() + ttl, remember)
+        now = self.clock()
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT generation FROM credential WHERE id=1').fetchone() != (self._generation,):
+                raise RuntimeError('auth-session credential generation changed; restart required')
+            db.execute('DELETE FROM sessions WHERE expires<=?', (now,))
+            db.execute('INSERT INTO sessions VALUES (?,?,?,?,?)', (self._token_verifier(token), now, now + ttl, int(remember), self._generation))
         return token, ttl
 
     def state(self, token: str | None) -> bool | None:
         if not token:
             return None
-        with self._lock:
-            session = self._sessions.get(token)
-            if session is None:
-                return None
-            if session[0] <= time.time():
-                self._sessions.pop(token, None)
-                return None
-            return session[1]
+        if len(token) > 256:
+            return None
+        with self._connect() as db:
+            row = db.execute('SELECT s.remember FROM sessions s JOIN credential c ON c.id=1 AND c.generation=s.generation WHERE s.verifier=? AND s.expires>? AND c.generation=?',
+                             (self._token_verifier(token), self.clock(), self._generation)).fetchone()
+        return bool(row[0]) if row else None
 
     def valid(self, token: str | None) -> bool:
         return self.state(token) is not None
 
     def revoke(self, token: str | None) -> None:
         if token:
-            with self._lock:
-                self._sessions.pop(token, None)
+            with self._connect() as db:
+                db.execute('DELETE FROM sessions WHERE verifier=?', (self._token_verifier(token),))
 
 
 class AuthServer(http.server.ThreadingHTTPServer):
@@ -142,7 +214,10 @@ class AuthServer(http.server.ThreadingHTTPServer):
             or any(char in password for char in "\r\n\x00")
         ):
             raise SystemExit("auth-session requires a valid non-placeholder password")
-        self.sessions = SessionStore(password)
+        try:
+            self.sessions = SessionStore(password)
+        except (sqlite3.Error, OSError, RuntimeError) as error:
+            raise SystemExit('auth-session durable storage initialization failed: ' + str(error)) from error
         del password
         site_host = _host(urlsplit(site).netloc or urlsplit(site).path)
         self.allowed_hosts = {site_host} if site_host else set()
@@ -153,6 +228,32 @@ class AuthServer(http.server.ThreadingHTTPServer):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except (sqlite3.Error, OSError, RuntimeError):
+            # Never issue successful login/cookies or fall back to RAM on failure.
+            print('auth-session durable storage unavailable', flush=True)
+            self._text(HTTPStatus.SERVICE_UNAVAILABLE, 'UNAVAILABLE')
+
+    def _text(self, status, key):
+        self._send(status, (LOGIN_COPY[login_language()][key] + '\n').encode('utf-8'),
+                   {'Content-Type': 'text/plain; charset=utf-8'})
+
+    def send_error(self, code, message=None, explain=None):
+        # Keep HTTP status/reason phrases and request parsing unchanged; never
+        # reflect untrusted protocol text in browser-visible error documents.
+        key = {401: 'REQUIRED', 403: 'FORBIDDEN', 404: 'NOT_FOUND',
+               503: 'UNAVAILABLE'}.get(code, 'BAD_REQUEST')
+        language = login_language()
+        lang, direction = metadata(language)
+        text = html.escape(LOGIN_COPY[language][key])
+        body = (f'<!doctype html><html lang="{lang}" dir="{direction}"><meta charset="utf-8">'
+                f'<title>{text}</title><body><p>{text}</p></body></html>').encode('utf-8')
+        self.close_connection = True
+        self._send(code, b'' if getattr(self, 'command', None) == 'HEAD' else body,
+                   {'Content-Type': 'text/html; charset=utf-8', 'Connection': 'close'})
+
     def _auth_server(self) -> AuthServer:
         return cast(AuthServer, self.server)
 
@@ -204,16 +305,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _page(self, error: str = "") -> bytes:
+        language = login_language()
+        copy = LOGIN_COPY[language]
         content = """<form method="post" action="/auth/login">
-  <label for="pass">Password</label><input id="pass" name="password" type="password" autocomplete="current-password" required>
-  <div class="remember"><input id="remember" name="remember" type="checkbox"><label for="remember">Remember this session</label></div>
+  <label for="pass">{{PASSWORD}}</label><input id="pass" name="password" type="password" autocomplete="current-password" required>
+  <div class="remember"><input id="remember" name="remember" type="checkbox"><label for="remember">{{REMEMBER}}</label></div>
   <div class="error" role="alert">{{ERROR}}</div>
-  <button type="submit">Connect</button>
+  <button type="submit">{{CONNECT}}</button>
  </form>"""
-        return LOGIN_PAGE.replace("{{CONTENT}}", content.replace("{{ERROR}}", error)).replace("{{VERSION}}", PRODUCT_VERSION).encode("utf-8")
+        lang, direction = metadata(language)
+        page = LOGIN_PAGE.replace('{{CONTENT}}', content).replace('{{LANG}}', lang).replace('{{DIR}}', direction)
+        page = page.replace('{{ERROR}}', html.escape(copy['INVALID']) if error else '')
+        page = page.replace('{{VERSION}}', html.escape(PRODUCT_VERSION))
+        for key, value in copy.items():
+            page = page.replace('{{' + key + '}}', html.escape(value))
+        return page.encode('utf-8')
 
     def do_GET(self) -> None:
         request_path = urlsplit(self.path).path
+        if request_path == '/health':
+            self._send(HTTPStatus.NO_CONTENT if self._auth_server().sessions.healthy() else HTTPStatus.SERVICE_UNAVAILABLE)
+            return
         if request_path == "/":
             token = self._token()
             session_state = self._auth_server().sessions.state(token)
@@ -230,14 +342,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 body = (Path(__file__).with_name("favicon.svg")).read_bytes()
             except OSError:
-                self._send(HTTPStatus.NOT_FOUND, b"not found\n", {"Content-Type": "text/plain; charset=utf-8"})
+                self._text(HTTPStatus.NOT_FOUND, 'NOT_FOUND')
             else:
                 self._send(HTTPStatus.OK, body, {"Content-Type": "image/svg+xml"})
             return
         if request_path == "/auth/check":
             self._check()
             return
-        self._send(HTTPStatus.NOT_FOUND, b"not found\n", {"Content-Type": "text/plain; charset=utf-8"})
+        if request_path == '/auth/gui-session':
+            import json
+            if not (self._auth_server().sessions.valid(self._token()) and self._request_host() in self._auth_server().allowed_hosts):
+                self._text(HTTPStatus.UNAUTHORIZED, 'REQUIRED')
+                return
+            import re
+            try:
+                state = Path('/run/ecd-gui-session/state').read_text(encoding='ascii')
+            except FileNotFoundError:
+                state = ''
+            match = re.fullmatch(r'([0-9a-f]{32}) (active|ended)\n', state)
+            import socket
+            ready = False
+            if match and match.group(2) == 'active':
+                try:
+                    with socket.create_connection(('electron-cash', 6080), timeout=0.5):
+                        ready = Path('/run/ecd-gui-session/state').read_text(encoding='ascii') == state
+                except OSError:
+                    pass
+            language = login_language()
+            lang, direction = metadata(language)
+            body = json.dumps({'state': match.group(2) if match else 'unavailable',
+                               'generation': match.group(1) if match else None, 'ready': ready,
+                               'lang': lang, 'dir': direction,
+                               'copy': LOGIN_COPY[language]}).encode()
+            self._send(HTTPStatus.OK, body, {'Content-Type': 'application/json'})
+            return
+        self._text(HTTPStatus.NOT_FOUND, 'NOT_FOUND')
 
     def do_POST(self) -> None:
         request_path = urlsplit(self.path).path
@@ -247,29 +386,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if request_path == "/auth/logout":
             self._logout()
             return
-        self._send(HTTPStatus.NOT_FOUND, b"not found\n", {"Content-Type": "text/plain; charset=utf-8"})
+        self._text(HTTPStatus.NOT_FOUND, 'NOT_FOUND')
 
     def _check(self) -> None:
         if self._auth_server().sessions.valid(self._token()) and self._request_host() in self._auth_server().allowed_hosts:
             self._send(HTTPStatus.NO_CONTENT)
         else:
-            self._send(HTTPStatus.UNAUTHORIZED, b"authentication required\n", {"Content-Type": "text/plain; charset=utf-8"})
+            # Expiry/revocation can race a successful availability probe and
+            # the following document navigation. Keep HTTP 401 protection, but
+            # let that top-level noVNC error document reach the existing login.
+            if (self.headers.get('Sec-Fetch-Dest') == 'document' and
+                    urlsplit(self.headers.get('X-Forwarded-Uri', '')).path == '/vnc.html'):
+                script = b"setTimeout(()=>location.replace('/'),0);"
+                integrity = base64.b64encode(hashlib.sha256(script).digest()).decode('ascii')
+                lang, direction = metadata(login_language())
+                title = html.escape(LOGIN_COPY[login_language()]['REQUIRED'])
+                body = (f'<!doctype html><html lang="{lang}" dir="{direction}"><meta charset=utf-8><title>{title}</title><script>'.encode() + script + b'</script></html>')
+                self._send(HTTPStatus.UNAUTHORIZED, body, {'Content-Type':'text/html; charset=utf-8',
+                    'Content-Security-Policy':"default-src 'none'; script-src 'sha256-" + integrity + "'; base-uri 'none'; frame-ancestors 'none'"})
+                return
+            self._text(HTTPStatus.UNAUTHORIZED, 'REQUIRED')
 
     def _login(self) -> None:
         if not self._same_origin():
-            self._send(HTTPStatus.FORBIDDEN, b"forbidden\n")
+            self._text(HTTPStatus.FORBIDDEN, 'FORBIDDEN')
             return
         try:
             length = int(self.headers.get("Content-Length", "-1"))
         except ValueError:
             length = -1
         if length < 0 or length > MAX_BODY:
-            self._send(HTTPStatus.BAD_REQUEST, b"invalid request\n")
+            self._text(HTTPStatus.BAD_REQUEST, 'BAD_REQUEST')
             return
         try:
             fields = parse_qs(self.rfile.read(length).decode("utf-8", "strict"), keep_blank_values=True)
         except UnicodeDecodeError:
-            self._send(HTTPStatus.BAD_REQUEST, b"invalid request\n")
+            self._text(HTTPStatus.BAD_REQUEST, 'BAD_REQUEST')
             return
         password = fields.get("password", [""])[0]
         if len(password) > MAX_CREDENTIAL_LENGTH:
@@ -297,7 +449,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _logout(self) -> None:
         if not self._same_origin():
-            self._send(HTTPStatus.FORBIDDEN, b"forbidden\n")
+            self._text(HTTPStatus.FORBIDDEN, 'FORBIDDEN')
             return
         self._auth_server().sessions.revoke(self._token())
         self._send(HTTPStatus.SEE_OTHER, headers={"Location": "/", "Set-Cookie": self._expired_cookie()})

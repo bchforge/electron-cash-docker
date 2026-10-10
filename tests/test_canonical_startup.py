@@ -640,6 +640,8 @@ def acceptance_run(*, project: str, temporary: Path, base_environment: dict[str,
             wait_healthy(identifiers[service], service)
         for service, image in images.items():
             assert_candidate_image(identifiers[service], image, env=environment)
+        from test_runtime import assert_hardening
+        assert_hardening(identifiers)
 
         cookie = assert_runtime_auth(port)
         assert_runtime_auth(port, host="127.0.0.1")
@@ -689,7 +691,10 @@ def acceptance_run(*, project: str, temporary: Path, base_environment: dict[str,
             "CASHFUSION_SELECTOR_MODE=count",
             "CASHFUSION_SELECTOR_SIZE_BCH=0.0001",
             "CASHFUSION_SELF_FUSE_PLAYERS=1",
+            "CASHFUSION_FEE_BUDGET=0",
+            "CASHFUSION_MIN_UTXO=1000",
         }
+        assert "DARK_MODE=false" in electron_env
         assert_stable(identifiers, port=port, cookie=cookie, env=environment, seconds=OBSERVATION_SECONDS)
 
         wallet_volume = model["volumes"]["electron-cash-data"]["name"]

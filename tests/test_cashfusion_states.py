@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import sys
@@ -37,13 +38,13 @@ SUPPORTED_CASHFUSION_ENV = (
     "CASHFUSION_SELECTOR_FRACTION",
     "CASHFUSION_QUEUED_AUTOFUSE",
     "CASHFUSION_AUTOFUSE_CONFIRMED_ONLY",
+    "CASHFUSION_FEE_BUDGET",
+    "CASHFUSION_MIN_UTXO",
 )
 REMOVED_CASHFUSION_ENV = (
     "CASHFUSION_TOR_HOST",
     "CASHFUSION_TOR_PORT",
     "CASHFUSION_TARGET",
-    "CASHFUSION_FEE_BUDGET",
-    "CASHFUSION_MIN_UTXO",
 )
 
 
@@ -646,6 +647,8 @@ def test_public_defaults():
         "CASHFUSION_SELECTOR_FRACTION": "1.0",
         "CASHFUSION_QUEUED_AUTOFUSE": "4",
         "CASHFUSION_AUTOFUSE_CONFIRMED_ONLY": "true",
+        "CASHFUSION_FEE_BUDGET": "0",
+        "CASHFUSION_MIN_UTXO": "1000",
     }
     assert ENV_DEFAULTS["WALLET_AUTO_CREATE"] == "false"
     assert ENV_DEFAULTS["TEST_WALLET_PASSWORD"] == ""
@@ -706,7 +709,15 @@ def test_removed_cashfusion_environment_is_absent_from_public_surfaces():
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        assert not any(variable in text for variable in REMOVED_CASHFUSION_ENV), path
+        for variable in REMOVED_CASHFUSION_ENV:
+            for line in text.splitlines():
+                if variable not in line:
+                    continue
+                # Documentation may explicitly identify an unsupported legacy
+                # knob; it must not publish an assignment or imply support.
+                assert path.suffix == ".md", (path, variable)
+                assert any(phrase in line for phrase in ("unsupported", "not supported", "sin admitirse", "no se admite")), (path, line)
+                assert not re.search(re.escape(variable) + r"[` ]*\s*=", line), (path, line)
 
 
 def test_entrypoint_rejects_unsafe_values():

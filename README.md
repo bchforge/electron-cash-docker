@@ -2,12 +2,12 @@
   <img src="docs/assets/electron-cash-docker-banner.png" alt="Electron Cash Docker — BCH Forge">
 </p>
 
-# Electron Cash Docker
-
 [![Release checks | PASSED](docs/badges/release-checks.svg)](#validation)
 [![Tests | ALL PASSED](docs/badges/tests.svg)](#validation)
-[![Bandit | passing · 2026-10-02](docs/badges/bandit.svg)](SECURITY.md#automated-validation)
-[![Trivy | passing · 2026-10-02](docs/badges/trivy.svg)](SECURITY.md#automated-validation)
+[![Bandit | source PASS (HIGH/HIGH) · 2026-10-10 UTC](docs/badges/bandit.svg)](SECURITY.md#automated-validation)
+[![Trivy | source PASS with exception · 2026-10-10 UTC](docs/badges/trivy.svg)](SECURITY.md#automated-validation)
+
+# Electron Cash Docker
 
 Electron Cash Docker packages [Electron Cash](https://github.com/Electron-Cash/Electron-Cash),
 the Bitcoin Cash SPV wallet, in a Docker deployment. Electron Cash can be used
@@ -27,12 +27,21 @@ is available for manual use.
 - Supported headless mode and optional password-protected JSON-RPC.
 - Encrypted, managed wallet backup and restore.
 - Non-root wallet container and verified bundled Flipstarter Helper plugin.
+- All official Electron Cash GUI languages and localized ECD web login.
+- Native Electron Cash startup theme through `DARK_MODE=false|true`.
+- Read-only container roots, scoped capabilities, no-new-privileges, bounded
+  resources/logs, and loopback-only raw RFB.
 
 ## Demo
 
+Try the browser interface without real funds using a disposable Chipnet wallet;
+see the user guides under [Project Links](#project-links).
+The guides cover isolated local setup and cleanup of only disposable resources.
+
 ![Electron Cash Docker testnet4 demo](docs/assets/electron-cash-docker-demo.gif)
 
-This demonstration uses testnet4, whose coins have no monetary value. It shows
+This historical pre-v1.0 demo, first introduced in v0.2, uses testnet4,
+whose coins have no monetary value. It shows
 the real Electron Cash Docker browser interface with isolated disposable test
 data, the testnet4 network view, Tor and CashFusion configuration, and the
 verified Flipstarter external plugin. Automatic fusion remains opt-in; no real
@@ -49,10 +58,11 @@ Requirements:
 ```bash
 git clone https://gitlab.com/bchforge/electron-cash-docker
 cd electron-cash-docker
-cp .env.example .env
+if [ ! -e .env ]; then cp .env.example .env; fi
 ```
 
-Edit `.env` and set `BASIC_AUTH_PASSWORD` to a real password. Compose requires
+Keep an existing `.env` when upgrading; compare it with `.env.example` instead
+of overwriting your settings. Edit `.env` and set `BASIC_AUTH_PASSWORD` to a real password. Compose requires
 the value before it creates containers; write `$$` for each literal `$` in the
 password. Then build and start the default browser deployment:
 
@@ -79,8 +89,9 @@ Cash's wallet setup wizard. Docker Compose creates the
 - **Headless:** Supported. Start the daemon without a GUI:
 
   ```bash
-  docker compose -f docker-compose.yml -f docker-compose.headless.yml up -d
-  docker compose exec --user 10001:10001 electron-cash \
+  docker compose -f docker-compose.yml -f docker-compose.headless.yml up -d --wait
+  docker compose -f docker-compose.yml -f docker-compose.headless.yml \
+    exec --user 10001:10001 electron-cash \
     /opt/electroncash-venv/bin/electron-cash daemon status
   ```
 
@@ -100,7 +111,7 @@ Cash's wallet setup wizard. Docker Compose creates the
   hardware path, with X11 and a supported Ledger device. It is not supported on
   macOS or Windows Docker Desktop, or for other hardware wallets. See
   [platform validation](docs/platform-validation.md) for the normal Compose
-  command, USB group setup, and maintainer-only test boundaries.
+  command, USB group setup, and tested hardware boundaries.
 
 ### Linux X11 Desktop
 
@@ -130,7 +141,11 @@ For an SSH-forwarded display, use the maintainer platform runner documented in
 
 ### macOS XQuartz Desktop
 
-Install and start XQuartz, then run the desktop launcher. It manages the
+Follow the macOS installation and native desktop instructions in the user guides
+under [Project Links](#project-links)
+for Docker Desktop, XQuartz, launcher prerequisites and Apple Silicon platform
+selection. On Intel Macs, after building the wallet image, run the desktop launcher.
+It manages the
 temporary XQuartz access needed by Docker Desktop and restores its prior
 settings when it exits:
 
@@ -191,10 +206,53 @@ by default (`CASHFUSION_AUTO_FUSE=false`). To disable the plugin entirely, set
 preferences; changes made in Electron Cash are preserved. Encrypted wallets
 still require their normal wallet password before CashFusion can start.
 
+CashFusion combines coins with other participants to improve transaction privacy;
+it does not guarantee anonymity. Configure deployment options in `.env` and
+wallet preferences in Electron Cash; both user guides under
+[Project Links](#project-links) cover the full configuration and limits.
+
 The bundled Flipstarter Helper is a Qt plugin. Plugins are verified during the
 image build and are not downloaded at runtime.
 
 ## Configuration and Upgrades
+
+Electron Cash starts in English by default (`EC_LANGUAGE=en_US`). For **new
+configuration files**, set `EC_LANGUAGE` in `.env` to any locale supported by
+the pinned Electron Cash version: all 38 official locale codes in Electron Cash
+4.4.6's `electroncash.i18n.languages` are accepted; an empty value (`EC_LANGUAGE=`)
+selects **System**. An unset variable defaults to English. Truly invalid
+codes fail before wallet initialization. Native GUI and headless/RPC use the
+same validation without requiring a GUI for language handling.
+
+Existing volumes retain their saved language, including explicit System (`''`)
+and historical configs with no language key (upstream System behavior). An
+existing `.env` remains valid but no longer overrides Settings at restart.
+Choose a different language in Electron Cash Settings for an existing config;
+that choice is saved and persists across restarts. Each network retains its own
+config. Changing `.env` and recreating the
+container affects only subsequently created configs. CLI language flags remain
+reserved; use Settings for saved choices and `EC_LANGUAGE` for first boot.
+
+The ECD login follows the effective EC locale on page reload after a Settings
+save, without a container restart. All 38 locales have bundled ECD copy, including
+session/error notices and Arabic/Persian RTL. Only a sanitized locale code crosses
+the existing GUI-state volume; the gateway cannot read wallet/config files. Exact
+regional catalogs take precedence, then a complete same-language catalog, then
+English. System is resolved by EC inside the wallet container, never by browser
+headers. Missing/unreadable publication falls back to `EC_LANGUAGE`, then English.
+ECD-owned noVNC-facing notices follow the same locale via the existing authenticated
+session-status response; upstream noVNC controls retain their own translation
+behavior. Host/global locales are untouched. These are first-pass translations,
+not native-speaker certified.
+Campaign-critical setup/security **documentation remains English/Spanish only**.
+For browser input, special keys and virtual keyboard details, see the
+user guides under [Project Links](#project-links).
+
+`DARK_MODE=true` selects Electron Cash's native dark theme. Missing, empty or
+`false` selects native light, including resetting a persisted dark preference.
+Other values fail at startup. It applies once before Qt on each launch; GUI
+changes can last for that session. Recreate after changing `.env`. It does not
+change the password form, noVNC styling or global locale.
 
 The default gateway listens on localhost. For a public deployment, set
 `CADDY_SITE_ADDRESS` to your domain and `CADDY_EDGE_BIND=0.0.0.0`, configure DNS,
@@ -230,7 +288,7 @@ docker compose up -d
 
 ## Validation
 
-The badges at the top of this README link here. Maintainer validation has a
+The validation badges below link here. Maintainer validation has a
 static/Compose fast path and a full provider-independent release gate:
 
 ```bash
@@ -260,15 +318,19 @@ locally through the repository scripts and does not require a hosted CI runner.
   Ledger support on native Linux Docker Engine.
   See [Access modes and platforms](#access-modes-and-platforms) for operating
   details.
-- [ ] `v1.0`: further runtime hardening, interface-language selection,
-  maintainer-run security validation, documentation of the built-in noVNC
-  virtual keyboard, English and Spanish setup and security documentation,
-  expanded browser, arm64, and integration tests, and a release demo.
+- [x] `v1.0`: runtime and internal RFB hardening, official EC GUI locales,
+  localized ECD login and English/Spanish user guides, native light/dark themes, CashFusion fee-budget and minimum-UTXO
+  controls, persistent web sessions, and clean multi-wallet GUI shutdown with
+  browser recovery. See release notes under [Project Links](#project-links) and
+  [platform validation](docs/platform-validation.md) for details and supported boundaries.
 
 ## Project Links
 
 - [Project repository](https://gitlab.com/bchforge/electron-cash-docker)
-- [CHANGELOG.md](CHANGELOG.md)
+- [English user guide](docs/USER-GUIDE.md) · [Guía de usuario en español](docs/USER-GUIDE-ES.md)
+  — setup, sessions, recovery, browser keyboard and full CashFusion configuration.
+- [Try it without funds](docs/USER-GUIDE.md#try-it-without-funds) · [Probar sin fondos](docs/USER-GUIDE-ES.md#probar-sin-fondos)
+- [CHANGELOG.md / v1.0 release notes](CHANGELOG.md#v10)
 - [Platform validation](docs/platform-validation.md)
 - [Security policy](SECURITY.md)
 - [Tor supply-chain notes](docs/tor-supply-chain.md)

@@ -200,7 +200,7 @@ def unique_project(prefix: str) -> str:
     base = os.environ.get("CI_PROJECT_PREFIX", "bchforge-test")
     project = register_resource("project", f"{base}-{prefix}-{uuid.uuid4().hex}")
     for suffix in ("-wallet", "-tor", "_caddy-data", "_caddy-config", "_caddy-log",
-                   "_fail2ban-state", "_caddy-ban-state", "_caddy-control", "_x11-authority"):
+                    "_fail2ban-state", "_caddy-ban-state", "_caddy-control", "_x11-authority", "_gui-session-state", "_auth-session-data"):
         register_resource("volume", project + suffix)
     return project
 

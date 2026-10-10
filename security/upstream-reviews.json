@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "purpose": "Permanent official-source catalog; candidate approvals belong in external CI evidence.",
+  "sources": [
+    {"id":"electron_advisories","url":"https://api.github.com/repos/Electron-Cash/Electron-Cash/security-advisories?per_page=100","kind":"advisories"},
+    {"id":"electron_releases","url":"https://api.github.com/repos/Electron-Cash/Electron-Cash/releases?per_page=10","kind":"releases"},
+    {"id":"caddy_advisories","url":"https://api.github.com/repos/caddyserver/caddy/security-advisories?per_page=100","kind":"advisories"},
+    {"id":"caddy_release","url":"https://api.github.com/repos/caddyserver/caddy/releases/latest","kind":"releases"},
+    {"id":"novnc_advisories","url":"https://api.github.com/repos/novnc/noVNC/security-advisories?per_page=100","kind":"advisories"},
+    {"id":"novnc_releases","url":"https://api.github.com/repos/novnc/noVNC/releases?per_page=10","kind":"releases"},
+    {"id":"tor_latest","url":"https://www.torproject.org/download/tor/","kind":"tor_latest"},
+    {"id":"tor_security_notice","url":"https://forum.torproject.org/t/security-release-0-4-9-14/22241.json","kind":"tor_notice"},
+    {"id":"python_security","url":"https://www.python.org/dev/security/","kind":"security_html"},
+    {"id":"python_advisory_revision","url":"https://api.github.com/repos/psf/advisory-database/commits?per_page=1","kind":"commits"},
+    {"id":"python_ecosystem_revision","url":"https://api.github.com/repos/pypa/advisory-database/commits?per_page=1","kind":"commits"},
+    {"id":"go_releases","url":"https://go.dev/doc/devel/release","kind":"go_releases"},
+    {"id":"go_vuln_database","url":"https://vuln.go.dev/index/db.json","kind":"text"},
+    {"id":"go_openpgp_advisory","url":"https://vuln.go.dev/ID/GO-2026-5932.json","kind":"text"},
+    {"id":"ubuntu_notices","url":"https://ubuntu.com/security/notices/rss.xml","kind":"rss"},
+    {"id":"alpine_secdb","url":"https://secdb.alpinelinux.org/v3.23/main.json","kind":"text"},
+    {"id":"alpine_secdb_next","url":"https://secdb.alpinelinux.org/v3.24/main.json","kind":"text"},
+    {"id":"flipstarter_releases","url":"https://gitlab.com/flipstarter/flipstarter-electron-cash/-/raw/master/RELEASE-NOTES.md","kind":"text"},
+    {"id":"ledger_upstream","url":"https://raw.githubusercontent.com/LedgerHQ/btchip-python/master/README.md","kind":"text"}
+  ],
+  "components": {
+    "electron_cash":{"sources":["electron_advisories","electron_releases"]},
+    "cashfusion":{"sources":["electron_advisories","electron_releases"]},
+    "caddy":{"sources":["caddy_advisories","caddy_release"]},
+    "tor":{"sources":["tor_latest","tor_security_notice"]},
+    "novnc":{"sources":["novnc_advisories","novnc_releases"]},
+    "python":{"sources":["python_security","python_advisory_revision","ubuntu_notices"]},
+    "go":{"sources":["go_releases","go_vuln_database"]},
+    "ubuntu":{"sources":["ubuntu_notices"]},
+    "alpine":{"sources":["alpine_secdb","alpine_secdb_next"]},
+    "go_modules":{"sources":["go_vuln_database","caddy_release","go_openpgp_advisory"]},
+    "python_dependencies":{"sources":["python_ecosystem_revision","python_advisory_revision"]},
+    "flipstarter":{"sources":["flipstarter_releases"]},
+    "ledger":{"sources":["ledger_upstream","python_ecosystem_revision","electron_advisories"]}
+  }
+}

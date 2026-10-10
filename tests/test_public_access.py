@@ -38,7 +38,7 @@ def http_status(
     return int(result.stdout)
 
 
-def login(host: str, password: str) -> tuple[int, str]:
+def login(host: str, password: str) -> tuple[int, str, str]:
     connection = http.client.HTTPSConnection(host, timeout=20)
     body = urlencode({"password": password})
     connection.request(
@@ -56,9 +56,9 @@ def login(host: str, password: str) -> tuple[int, str]:
     response.read()
     connection.close()
     if status != 303:
-        return status, ""
+        return status, "", ""
     cookie = SimpleCookie(headers["Set-Cookie"])
-    return status, f"ecd_session={cookie['ecd_session'].value}"
+    return status, f"ecd_session={cookie['ecd_session'].value}", headers.get("Location", "")
 
 
 def websocket_status(host: str, cookie: str) -> tuple[int, bytes]:
@@ -142,18 +142,23 @@ def assert_origin_identity(host: str) -> None:
 
 
 def main() -> None:
-    host = os.environ.get("PUBLIC_HOST", "ecd-test.bchforge.org")
+    host = os.environ.get("PUBLIC_HOST")
+    if not host:
+        raise AssertionError("PUBLIC_HOST is required for the opt-in public-access test")
+    if "/" in host or "@" in host or host != host.strip():
+        raise AssertionError("PUBLIC_HOST must be a hostname or host:port, not a URL")
     password = os.environ.get("PUBLIC_AUTH_PASSWORD")
     if not password:
         raise AssertionError("PUBLIC_AUTH_PASSWORD is required and must not be committed")
     assert_origin_identity(host)
     assert http_status(host, "/") == 200
     assert http_status(host, "/vnc.html") == 401
-    wrong_status, _ = login(host, "wrong-secret")
+    wrong_status, _, _ = login(host, "wrong-secret")
     assert wrong_status == 401
-    login_status, cookie = login(host, password)
+    login_status, cookie, location = login(host, password)
     assert login_status == 303 and cookie
-    assert http_status(host, "/", cookie) == 303
+    assert location.startswith("/vnc.html?autoconnect=true")
+    assert http_status(host, location, cookie) == 200
     assert http_status(host, "/vnc.html", cookie) == 200
     status, banner = websocket_status(host, cookie)
     for _ in range(2):

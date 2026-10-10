@@ -92,10 +92,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY healthcheck.c /tmp/tor-healthcheck.c
+COPY signal-mask-compat.py /tmp/signal-mask-compat.py
 
 RUN set -eux; \
     archive="tor-${TOR_VERSION}.tar.gz"; \
     tar -xzf "/tmp/tor-download/${archive}" -C /tmp; \
+    python3 /tmp/signal-mask-compat.py "/tmp/tor-${TOR_VERSION}/src/lib/sandbox/sandbox.c"; \
     cd "/tmp/tor-${TOR_VERSION}"; \
     ./configure \
         --prefix=/usr/local \

@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:0.3")
+IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:1.0")
 
 
 def run(command: list[str], *, timeout: int = 30, input_text: str | None = None) -> subprocess.CompletedProcess[str]:

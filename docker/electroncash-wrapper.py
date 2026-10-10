@@ -48,6 +48,51 @@ def install_shutdown_timer():
     from PyQt5.QtCore import QTimer
 
     original_main = ElectrumGui.main
+    original_init = ElectrumGui.__init__
+    original_start_window = ElectrumGui.start_new_window
+    original_last_window_check = ElectrumGui._quit_after_last_window
+
+    def init(gui, config, daemon, plugins):
+        original_init(gui, config, daemon, plugins)
+        gui._docker_window_workflow_depth = 0
+        gui._docker_deferred_last_window_check = False
+        # This diagnostic is emitted by the real Qt session after upstream
+        # has selected its translation catalog, not by Compose interpolation.
+        from electroncash import i18n
+        print(f"[+] Electron Cash GUI language: {config.get('language')} ({i18n._('Wallet')})", flush=True)
+        expected_dark = config.get('qt_gui_color_theme', 'default') == 'dark'
+        if expected_dark and not gui.qdarkstyle_is_enabled:
+            raise RuntimeError('requested native Qt dark theme is unavailable')
+        print(f"[+] Electron Cash GUI theme: {config.get('qt_gui_color_theme', 'default')} (dark active: {gui.qdarkstyle_is_enabled})", flush=True)
+        def session_end():
+            if not (_shutdown_requested or _shutdown_started or SHUTDOWN_MARKER.exists()):
+                from gui_session import end
+                end()
+        gui.app.aboutToQuit.connect(session_end)
+
+    ElectrumGui.__init__ = init
+
+    def last_window_check(gui):
+        # A native open/create/restore call may be constructing its wallet
+        # window behind a modal before it is added to gui.windows. Preserve
+        # that owned continuation; do not count visible widgets or processes.
+        if gui._docker_window_workflow_depth:
+            gui._docker_deferred_last_window_check = True
+            return
+        return original_last_window_check(gui)
+
+    def start_window(gui, path, uri):
+        gui._docker_window_workflow_depth += 1
+        try:
+            return original_start_window(gui, path, uri)
+        finally:
+            gui._docker_window_workflow_depth -= 1
+            if not gui._docker_window_workflow_depth and gui._docker_deferred_last_window_check:
+                gui._docker_deferred_last_window_check = False
+                original_last_window_check(gui)
+
+    ElectrumGui._quit_after_last_window = last_window_check
+    ElectrumGui.start_new_window = start_window
 
     def main(gui):
         timer = QTimer(gui)
@@ -73,7 +118,18 @@ def install_shutdown_timer():
         timer.timeout.connect(poll_shutdown)
         timer.start(100)
         gui._shutdown_timer = timer
-        return original_main(gui)
+        result = original_main(gui)
+        # The initial native wizard runs a nested event loop. Cancelling it
+        # can return normally before QApplication.exec_()/aboutToQuit occurs.
+        # At this authoritative return, no continuation workflow remains.
+        if not any(not window.cleaned_up for window in gui.windows) and not (
+            _shutdown_requested or _shutdown_started or SHUTDOWN_MARKER.exists()
+        ):
+            from gui_session import enabled, read_state, end
+            state = read_state() if enabled() else None
+            if state and state[1] == 'active':
+                end()
+        return result
 
     ElectrumGui.main = main
 
@@ -174,6 +230,8 @@ def main():
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     install_shutdown_timer()
+    from login_locale import install_language_bridge
+    install_language_bridge()
     install_test_wallet_password()
     install_cashfusion_defaults()
     sys.argv[0] = APP_PATH

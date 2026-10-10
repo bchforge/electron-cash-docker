@@ -6,14 +6,15 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+import tempfile
 import time
 import uuid
 from test_support import unique_resource
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CADDY_IMAGE = os.environ.get("CADDY_IMAGE", "electron-cash-docker-caddy:0.3")
-FAIL2BAN_IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:0.3")
+CADDY_IMAGE = os.environ.get("CADDY_IMAGE", "electron-cash-docker-caddy:1.0")
+FAIL2BAN_IMAGE = os.environ.get("FAIL2BAN_IMAGE", "electron-cash-docker-fail2ban:1.0")
 CLIENT_IMAGE = os.environ.get("ELECTRON_CASH_IMAGE", "electron-cash:4.4.6")
 
 
@@ -109,7 +110,7 @@ def main() -> None:
     caddy = f"ecd-caddy-ban-caddy-{suffix}"
     clients = [f"ecd-caddy-ban-client-{suffix}-{letter}" for letter in ("a", "b")]
     port = free_port()
-    config_path = os.path.join("/tmp", f"ecd-caddy-ban-{suffix}.Caddyfile")
+    config_path = os.path.join(tempfile.gettempdir(), f"ecd-caddy-ban-{suffix}.Caddyfile")
     config = f'''{{
     admin unix//run/caddy/admin.sock
 }}

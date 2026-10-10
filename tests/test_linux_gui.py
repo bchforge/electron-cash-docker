@@ -9,6 +9,7 @@ import importlib.util
 import os
 import re
 import secrets
+import select
 import signal
 import socket
 import stat
@@ -25,6 +26,7 @@ from test_support import (
     tor_image,
     unique_project,
     unique_resource,
+    resource_owner,
 )
 
 
@@ -119,31 +121,53 @@ def check_xauthority_display_normalization() -> None:
         raise AssertionError(f"malformed DISPLAY was accepted: {malformed!r}")
 
 
-def start_xvfb(display: str, authority: Path, framebuffer: Path) -> subprocess.Popen:
+class XvfbProcess(subprocess.Popen):
+    xvfb_container: str
+    x11_socket_directory: Path
+
+
+def start_xvfb(display: str, authority: Path, framebuffer: Path) -> XvfbProcess:
     framebuffer.mkdir(mode=0o700, parents=True, exist_ok=True)
-    process = subprocess.Popen(
-        ["Xvfb", display, "-screen", "0", "1024x768x24", "-nolisten", "tcp",
-         "-auth", str(authority), "-fbdir", str(framebuffer)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-    )
+    temporary = framebuffer.parent / 'x11-temp'
+    temporary.mkdir(mode=0o700, exist_ok=True)
+    sockets = temporary / '.X11-unix'
+    sockets.mkdir(mode=0o1777, exist_ok=True)
+    sockets.chmod(0o1777)
+    name = unique_resource('external-xvfb', kind='container')
     number = display.rsplit(":", 1)[1].split(".", 1)[0]
-    path = Path("/tmp/.X11-unix") / f"X{number}"
+    process = XvfbProcess(
+        ['docker', 'run', '--rm', '--pull=never', '--name', name,
+         '--label', 'com.bchforge.electron-cash-docker.test-owner=' + resource_owner(),
+         '--network', 'none', '--read-only', '--cap-drop=ALL', '--security-opt', 'no-new-privileges:true',
+         '--user', f'{os.getuid()}:{os.getgid()}',
+         '--mount', f'type=bind,src={temporary},dst=/tmp',
+         '--mount', f'type=bind,src={authority},dst=/fixture-authority,readonly',
+         '--mount', f'type=bind,src={framebuffer},dst=/framebuffer',
+         '--entrypoint', 'Xvfb', electron_cash_image(), ':' + number, '-screen', '0', '1024x768x24',
+         '-nolisten', 'tcp', '-auth', '/fixture-authority', '-fbdir', '/framebuffer', '-displayfd', '1'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    process.xvfb_container = name
+    process.x11_socket_directory = temporary / '.X11-unix'
+    path = process.x11_socket_directory / f"X{number}"
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        if path.is_socket():
-            return process
+        if process.stdout and select.select([process.stdout], [], [], 0.1)[0]:
+            ready = process.stdout.readline().decode().strip()
+            if ready == number and path.is_socket():
+                return process
         if process.poll() is not None:
             break
-        time.sleep(0.1)
-    process.terminate()
-    process.wait(timeout=10)
-    raise AssertionError("task-owned external Xvfb did not create its local display socket")
+    stop_xvfb(process)
+    diagnostic = process.stderr.read().decode(errors='replace') if process.stderr else ''
+    raise AssertionError('task-owned external Xvfb did not become ready: ' + diagnostic)
 
 
-def stop_xvfb(process: subprocess.Popen | None) -> None:
+def stop_xvfb(process: XvfbProcess | None) -> None:
     if process is None or process.poll() is not None:
         return
-    process.terminate()
+    stopped = run(['docker', 'stop', '--timeout=5', process.xvfb_container], timeout=15)
+    assert stopped.returncode == 0, 'unable to stop the exact task-owned external Xvfb fixture'
     process.wait(timeout=10)
 
 
@@ -212,7 +236,7 @@ def assert_private_copy(helper: str, wallet: str, display: str, env: dict[str, s
     helper_socket = next(mount for mount in helper_info["Mounts"]
                          if mount["Destination"] == "/tmp/.X11-unix")
     assert helper_socket["Type"] == "bind" and not helper_socket["RW"]
-    assert helper_socket["Source"] == "/tmp/.X11-unix"
+    assert helper_socket["Source"] == env.get('X11_SOCKET_DIR', '/tmp/.X11-unix')
     caps = {value.removeprefix("CAP_") for value in helper_host["CapAdd"] or []}
     dropped = {value.removeprefix("CAP_") for value in helper_host["CapDrop"] or []}
     assert caps == {"CHOWN", "DAC_READ_SEARCH"}
@@ -356,6 +380,7 @@ def main() -> None:
         server = start_xvfb(display, default_authority, framebuffer)
         environment = {**os.environ, "HOME": str(home), "BASIC_AUTH_PASSWORD": uuid.uuid4().hex,
                        "NETWORK": "chipnet", "DISPLAY": display, "USE_TOR": "true",
+                       "X11_SOCKET_DIR": str(server.x11_socket_directory),
                        "ELECTRON_CASH_IMAGE": electron_cash_image(), "TOR_IMAGE": tor_image(),
                        "ECD_WALLET_VOLUME": wallet, "ECD_TOR_VOLUME": tor,
                        "CADDY_HTTP_HOST_PORT": free_port(), "CADDY_HTTPS_HOST_PORT": free_port()}
