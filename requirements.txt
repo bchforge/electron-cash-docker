@@ -1,7 +1,7 @@
 # Direct runtime Python dependencies for the Electron Cash virtual environment.
 # Keep this manifest limited to the packages previously installed by Dockerfile.
 pyaes==1.6.1
-ecdsa==0.19.1
+ecdsa==0.19.2
 requests==2.32.3
 qrcode==7.4.2
 protobuf==5.29.6
