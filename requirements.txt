@@ -9,6 +9,6 @@ jsonrpclib-pelix==0.4.0
 PySocks==1.7.1
 python-dateutil==2.8.2
 stem==1.8.2
-certifi==2024.7.4
+certifi==2026.10.19
 pathvalidate==3.2.0
 qdarkstyle==3.2.3
